@@ -288,12 +288,11 @@ also stored for plotting.
 
 | Stage | Script(s) | What | GPU | Est. walltime |
 |---|---|---|---|---|
-| **A** | `02`, `03`, `04` | Extract encoder-space embeddings; compute + plot all gap metrics | 16 GB | ~1 day |
-| **B.1** | `05` | Projector pretraining on Bunny 1M (LLM + encoder frozen) | 16 GB | 12–24 h |
-| **B.2** | `06` | Full visual instruction tuning on InternVL SFT | A100 40 GB+ | 12–24 h |
-| **C** | `07`, `03`, `04` | Extract projected-token embeddings × 3 checkpoints; compute + plot | 16 GB | ~1 day |
-| **D** | `08`, `09` | Zero-shot captioning on Karpathy test 5K; CIDEr / BLEU-4 / METEOR / SPICE | 16 GB | ~2 h |
-
+| **A** | `02`, `03`, `04` | Extract encoder-space embeddings; compute + plot all gap metrics |
+| **B.1** | `05` | Projector pretraining on Bunny 1M (LLM + encoder frozen) |
+| **B.2** | `06` | Full visual instruction tuning on InternVL SFT |
+| **C** | `07`, `03`, `04` | Extract projected-token embeddings × 3 checkpoints; compute + plot |
+| **D** | `08`, `09` | Zero-shot captioning on Karpathy test 5K; CIDEr / BLEU-4 / METEOR / SPICE |
 ### Experiment flow
 
 ```mermaid
