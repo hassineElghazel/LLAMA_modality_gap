@@ -286,7 +286,7 @@ also stored for plotting.
 
 ## Pipeline overview
 
-| Stage | Script(s) | What | GPU | Est. walltime |
+| Stage | Script(s) | What |
 |---|---|---|---|---|
 | **A** | `02`, `03`, `04` | Extract encoder-space embeddings; compute + plot all gap metrics |
 | **B.1** | `05` | Projector pretraining on Bunny 1M (LLM + encoder frozen) |
@@ -447,19 +447,6 @@ Every script writes alongside its outputs:
 All scripts set `torch.backends.cudnn.deterministic = True` and
 `torch.backends.cudnn.benchmark = False`. Single-GPU Float32 runs are bit-exact
 reproducible. Multi-GPU bf16 runs are not — documented explicitly in the thesis.
-
----
-
-## Hardware requirements
-
-| Stage | GPU | Notes |
-|---|---|---|
-| A — encoder diagnostics | 16 GB | Encoder forward only, no training |
-| B.1 — Stage 1 training | 16 GB | Only projector gets gradients; LLM in FP16 |
-| B.2 — Stage 2 training | A100 40 GB (min) | Full LLM FT. Fallback: LoRA r=16 on 24 GB |
-| C — projected-token extraction | 16 GB | Forward only × 3 checkpoints |
-| D — captioning eval | 16 GB | Generation only, no training |
-| Metric computation, plotting | CPU | NumPy / scipy, no GPU needed |
 
 ---
 
