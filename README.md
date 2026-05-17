@@ -287,7 +287,7 @@ also stored for plotting.
 ## Pipeline overview
 
 | Stage | Script(s) | What |
-|---|---|---|---|---|
+|---|---|---|
 | **A** | `02`, `03`, `04` | Extract encoder-space embeddings; compute + plot all gap metrics |
 | **B.1** | `05` | Projector pretraining on Bunny 1M (LLM + encoder frozen) |
 | **B.2** | `06` | Full visual instruction tuning on InternVL SFT |
