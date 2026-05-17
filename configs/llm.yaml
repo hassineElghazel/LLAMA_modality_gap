@@ -1,0 +1,24 @@
+# Llama-3-8B-Instruct configuration.
+
+model:
+  name: llama3_8b_instruct
+  hf_id: meta-llama/Meta-Llama-3-8B-Instruct
+  hidden_size: 4096
+  # Image placeholder token spliced into the prompt; projector output replaces it.
+  image_token: "<image>"
+
+dtype:
+  # Inference + frozen-LLM training in bf16. Stage 2 SFT also bf16.
+  weights: bfloat16
+  compute: bfloat16
+
+generation:
+  do_sample: false
+  num_beams: 1
+  max_new_tokens: 64
+  temperature: 1.0
+  top_p: 1.0
+
+tokenizer:
+  pad_token: "<|end_of_text|>"
+  padding_side: left   # left-padded for generation

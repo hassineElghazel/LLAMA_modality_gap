@@ -1,0 +1,32 @@
+# Zero-shot captioning evaluation on COCO Karpathy test 5K.
+
+eval_set:
+  name: coco_karpathy_test
+  num_images: 5000
+  karpathy_split_json: data/karpathy/dataset_coco.json
+  image_root: data/coco
+
+prompt:
+  system: ""   # Llama-3-Instruct format applied at runtime
+  user: |
+    <image>
+    Provide a brief, one-sentence description of this image.
+
+generation:
+  do_sample: false
+  num_beams: 1
+  max_new_tokens: 64
+
+batch:
+  per_device_batch_size: 8
+
+checkpoint:
+  vlm_checkpoint: outputs/checkpoints/stage2_full.pt
+
+output:
+  predictions_path: outputs/predictions/zero_shot_captions.json
+  scores_path: outputs/metrics/captioning_scores.json
+  qualitative_report: outputs/reports/qualitative_examples.md
+  num_qualitative_samples: 20
+
+seed: 42

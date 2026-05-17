@@ -1,0 +1,20 @@
+# 2-layer MLP projector (LLaVA-style).
+# Maps CLIP vision-tower token features into Llama-3 input embedding space.
+
+architecture:
+  type: mlp2x_gelu
+  in_dim: 1024     # LLM2CLIP vision-tower hidden dim (per-token)
+  hidden_dim: 4096
+  out_dim: 4096    # Llama-3 hidden size
+  activation: gelu
+
+initialization:
+  # Standard LLaVA scheme.
+  weight_init: kaiming_normal
+  bias_init: zeros
+
+# At training time the projector takes the full sequence of 576 visual tokens
+# (post-CLIP) and emits 576 tokens of dim 4096, which are spliced into the LLM
+# input embedding sequence at the position of the <image> placeholder.
+sequence:
+  num_visual_tokens: 576

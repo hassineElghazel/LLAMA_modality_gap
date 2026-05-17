@@ -1,0 +1,31 @@
+# Dataset paths and diagnostic-sample manifest.
+
+coco:
+  image_root: data/coco
+  train2014: data/coco/train2014
+  val2014: data/coco/val2014
+  karpathy_split_json: data/karpathy/dataset_coco.json
+  expected_total_images: 123287
+
+karpathy_split:
+  train: 113287
+  val: 5000
+  test: 5000
+
+diagnostic_sample:
+  # Deterministic 10K sample from val+test pool. Per ReAlign Fig. 7, gap stats
+  # stabilize around N=1e4 — using more is wasteful, less adds estimation noise.
+  num_pairs: 10000
+  pool: [val, test]
+  caption_per_image: 1   # one of the 5 references, picked with fixed seed
+  seed: 42
+  manifest_path: outputs/diagnostics_manifest.json
+
+bunny_pretrain:
+  hf_repo: BoyaWu10/Bunny-v1_0-data
+  local_path: data/bunny_pretrain
+  num_samples: 1000000
+
+internvl_sft:
+  source: InternVL release (InternVL-Chat-V1.2-SFT)
+  local_path: data/internvl_sft

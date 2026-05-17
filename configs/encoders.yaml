@@ -1,0 +1,49 @@
+# LLM2CLIP encoder configuration.
+# Source: matches both ReAlign and AnisoAlign papers exactly.
+#
+# LLM2CLIP has TWO model checkpoints:
+#  - vision tower: microsoft/LLM2CLIP-Openai-L-14-336
+#  - text tower:   microsoft/LLM2CLIP-Llama-3-8B-Instruct-CC-Finetuned
+#                  (a CC-finetuned variant of Llama-3, wrapped via LLM2Vec)
+# This is DISTINCT from the captioning LLM backbone (configs/llm.yaml), which is
+# the original meta-llama/Meta-Llama-3-8B-Instruct.
+
+vision_model:
+  hf_id: microsoft/LLM2CLIP-Openai-L-14-336
+  image_size: 336
+  # CLIP ViT-L/14 with 336x336 input -> 24x24 = 576 visual tokens.
+  num_visual_tokens: 576
+  # Per-token vision hidden dim. CANONICAL CLIP ViT-L value is 1024.
+  # The reference's llm2clip_encoder reports 1280 in one place; verify on first
+  # load (the encoder wrapper probes the model and warns if the actual value
+  # differs from this expectation).
+  expected_vision_hidden_dim: 1024
+  # Contrastive (projected) output dim used by encode_image / encode_text.
+  contrastive_dim: 768
+
+text_model:
+  # CC-finetuned Llama-3-8B used as LLM2CLIP's text tower. NOT the captioning
+  # LLM (that one is in configs/llm.yaml).
+  hf_id: microsoft/LLM2CLIP-Llama-3-8B-Instruct-CC-Finetuned
+  # Workaround: LLM2Vec inspects config._name_or_path and only accepts the
+  # canonical Meta-Llama-3-8B-Instruct id. The encoder wrapper patches this at
+  # load time per reference embed.py:130-132.
+  llm2vec_name_workaround: meta-llama/Meta-Llama-3-8B-Instruct
+  pooling_mode: mean
+  max_length: 512
+  doc_max_length: 512
+
+image_processor:
+  # LLM2CLIP-Openai-L-14-336 does not ship its own preprocessor. The reference
+  # falls back to plain CLIP ViT-L/14-336 preprocessing (embed.py:104-115).
+  fallback_hf_id: openai/clip-vit-large-patch14-336
+  mean: [0.48145466, 0.4578275, 0.40821073]
+  std: [0.26862954, 0.26130258, 0.27577711]
+
+inference:
+  device: cuda
+  # Storage dtype for token-level features (input to the projector). Gap
+  # diagnostics ALWAYS cast to Float64 (see metrics.py).
+  embedding_dtype: float32
+  l2_normalize_contrastive_output: true
+  batch_size: 32

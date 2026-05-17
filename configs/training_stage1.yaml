@@ -1,0 +1,47 @@
+# Stage 1: projector-only pretraining on Bunny-pretrain 1M.
+# LLM frozen, encoder frozen. Only ~17M projector params get gradients.
+# Feasible on 16GB GPU.
+
+data:
+  dataset: bunny_pretrain_1m
+  path: data/bunny_pretrain
+  num_samples: 1000000
+
+freeze:
+  llm: true
+  encoder: true
+  projector: false
+
+optimizer:
+  name: adamw
+  lr: 5.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+schedule:
+  warmup_ratio: 0.03
+  type: cosine
+  num_epochs: 1
+
+batch:
+  per_device_batch_size: 32   # tune to fit 16GB
+  gradient_accumulation_steps: 1
+
+precision:
+  amp: bf16
+
+deepspeed:
+  # Vendored from Yu-xm/ReVision @ 9353aea — see THIRD_PARTY_LICENSES.md.
+  config: configs/deepspeed/zero2.json
+
+logging:
+  log_every_steps: 50
+  eval_every_steps: 0   # no eval during Stage 1
+  save_every_steps: 5000
+
+output:
+  checkpoint_path: outputs/checkpoints/stage1_projector.pt
+  log_dir: outputs/logs/stage1
+
+seed: 42

@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modality-gap-captioning"
+version = "0.1.0"
+description = "Diagnostic-phase pipeline for modality gap in a Llama-3 + LLM2CLIP captioning MLLM"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = { text = "MIT" }
+authors = [{ name = "Thesis project" }]
+
+dependencies = [
+  "torch==2.3.1",
+  "torchvision==0.18.1",
+  "transformers>=4.42,<4.45",
+  "accelerate>=0.30",
+  "llm2vec @ git+https://github.com/McGill-NLP/llm2vec.git@33d5ca9d51c695fa9dcb7e35889e2ee6051cc20a",
+  "peft>=0.11",
+  "bitsandbytes>=0.43",
+  "pycocoevalcap",
+  "pycocotools",
+  "numpy",
+  "scipy",
+  "scikit-learn",
+  "matplotlib",
+  "seaborn",
+  "tqdm",
+  "rich",
+  "pyyaml",
+  "einops",
+  "Pillow",
+  "huggingface-hub",
+  "datasets",
+]
+
+[project.optional-dependencies]
+train = ["deepspeed>=0.14"]
+dev = ["pytest", "pytest-cov", "ruff", "black"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --strict-markers"
+markers = [
+  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+  "gpu: marks tests as requiring GPU",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
