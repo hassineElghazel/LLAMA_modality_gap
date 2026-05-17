@@ -293,51 +293,7 @@ also stored for plotting.
 | **B.2** | `06` | Full visual instruction tuning on InternVL SFT |
 | **C** | `07`, `03`, `04` | Extract projected-token embeddings × 3 checkpoints; compute + plot |
 | **D** | `08`, `09` | Zero-shot captioning on Karpathy test 5K; CIDEr / BLEU-4 / METEOR / SPICE |
-### Experiment flow
 
-```mermaid
-flowchart TD
-    subgraph A["Stage A — Encoder Space ①  ·  16 GB  ·  ~1 day"]
-        A1["02  extract 768-dim embeddings\nCOCO 10K · Float64"]
-        A2["03  compute gap metrics\n04  plots + figures"]
-        A1 --> A2
-    end
-
-    subgraph B["Stage B — Training"]
-        B1["Stage B.1 — Projector pretraining\nBunny 1M · 16 GB · 12-24 h\nLLM + encoder frozen"]
-        B2["Stage B.2 — Full instruction tuning\nInternVL SFT · A100 40 GB · 12-24 h\nLoRA fallback: r=16  α=32  on 24 GB"]
-        B1 --> B2
-    end
-
-    subgraph C["Stage C — Projected-Token Space ②  ·  16 GB  ·  ~1 day"]
-        direction LR
-        C0["random-init\ncheckpoint"]
-        C1["Stage B.1\ncheckpoint"]
-        C2["Stage B.2\ncheckpoint"]
-        CM["07  extract 4096-dim embeddings\n03  compute gap metrics · 04  plots\ntrajectory: gap vs. training stage"]
-        C0 & C1 & C2 --> CM
-    end
-
-    subgraph D["Stage D — Captioning Eval  ·  16 GB  ·  ~2 h"]
-        D1["08  generate captions\nKarpathy test 5K"]
-        D2["09  score\nCIDEr  ·  BLEU-4  ·  METEOR  ·  SPICE"]
-        D1 --> D2
-    end
-
-    A --> B
-    B1 -->|"stage1_projector.pt"| C1
-    B2 -->|"stage2_full.pt"| C2
-    A -.->|"baseline — no training"| C0
-    B2 -->|"stage2_full.pt"| D1
-```
-
-The only A100 dependency is Stage B.2. All other stages fit on a 16 GB GPU.
-
-**LoRA fallback for B.2:** if A100 access is delayed, set `lora_fallback.enabled: true`
-in `configs/training_stage2.yaml` (r=16, α=32, all attention + MLP projections).
-This fits on 24 GB and is documented as a hardware-constrained choice.
-
----
 
 ## Setup and usage
 
