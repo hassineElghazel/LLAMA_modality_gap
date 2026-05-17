@@ -24,7 +24,7 @@ This project reproduces and extends the architecture from two papers:
 | **AnisoAlign** — Yu et al., 2026b | [2605.07825](https://arxiv.org/abs/2605.07825) | Anisotropic residual structure; `d_eff`, `A_r` metrics |
 | **Modality Gap** — Liang et al., 2022 | [2203.02053](https://arxiv.org/abs/2203.02053) | Original gap characterization in CLIP |
 
-### Novel contribution
+### Experiment contribution
 
 The papers measure the modality gap at **one point**: the encoder's contrastive output
 space (768-dim, L2-normalized). This project measures it at **two points**:
