@@ -8,7 +8,7 @@
 data:
   dataset: bunny_v1_1
   path: data/bunny_v1_1
-  hf_repo: BoyaWu10/Bunny-v1.1-data
+  hf_repo: BoyaWu10/Bunny-v1_1-data
 
 freeze:
   llm_embed: true   # text-side target only

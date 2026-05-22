@@ -40,7 +40,7 @@ fi
 # ---------- Bunny-v1.1-data (Stage 1 contrastive pretraining) ----------
 if [ -z "$(ls -A "$DATA_DIR/bunny_v1_1" 2>/dev/null)" ]; then
   echo "[data] downloading Bunny-v1.1-data from HuggingFace"
-  huggingface-cli download BoyaWu10/Bunny-v1.1-data \
+  huggingface-cli download BoyaWu10/Bunny-v1_1-data \
     --repo-type dataset \
     --local-dir "$DATA_DIR/bunny_v1_1" \
     --local-dir-use-symlinks False
