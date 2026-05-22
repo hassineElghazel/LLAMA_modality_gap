@@ -1,14 +1,13 @@
-# Llama-3-8B-Instruct configuration.
+# LLaMA-2-7B configuration (Stage 2: LoRA fine-tuning).
 
 model:
-  name: llama3_8b_instruct
-  hf_id: meta-llama/Meta-Llama-3-8B-Instruct
+  name: llama2_7b
+  hf_id: meta-llama/Llama-2-7b-hf
   hidden_size: 4096
-  # Image placeholder token spliced into the prompt; projector output replaces it.
+  # Image placeholder token spliced into the prompt; connector output replaces it.
   image_token: "<image>"
 
 dtype:
-  # Inference + frozen-LLM training in bf16. Stage 2 SFT also bf16.
   weights: bfloat16
   compute: bfloat16
 
@@ -20,5 +19,5 @@ generation:
   top_p: 1.0
 
 tokenizer:
-  pad_token: "<|end_of_text|>"
-  padding_side: left   # left-padded for generation
+  pad_token: "</s>"
+  padding_side: left

@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "modality-gap-captioning"
+name = "modality-gap-connector-ablation"
 version = "0.1.0"
-description = "Diagnostic-phase pipeline for modality gap in a Llama-3 + LLM2CLIP captioning MLLM"
+description = "Connector ablation study (C0/C1/C2/C3) measuring the modality gap in a LLaMA-2-7B + CLIP ViT-L/14 MLLM"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 license = { text = "MIT" }
@@ -16,7 +16,6 @@ dependencies = [
   "torchvision==0.18.1",
   "transformers>=4.42,<4.45",
   "accelerate>=0.30",
-  "llm2vec @ git+https://github.com/McGill-NLP/llm2vec.git@33d5ca9d51c695fa9dcb7e35889e2ee6051cc20a",
   "peft>=0.11",
   "bitsandbytes>=0.43",
   "pycocoevalcap",
@@ -33,6 +32,8 @@ dependencies = [
   "Pillow",
   "huggingface-hub",
   "datasets",
+  # VLMEvalKit: downstream benchmark harness (MME, MMStar, MMMU, POPE, etc.).
+  "vlmeval",
 ]
 
 [project.optional-dependencies]

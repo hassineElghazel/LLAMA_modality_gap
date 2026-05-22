@@ -1,45 +1,90 @@
-"""Extract projected-token-space embeddings (the §2 conceptual extension).
+"""Extract connector-output (4096-d) embeddings for one experimental condition.
 
-Run three times:
-  --checkpoint random                              -> tag=untrained
-  --checkpoint outputs/checkpoints/stage1_projector.pt  -> tag=stage1
-  --checkpoint outputs/checkpoints/stage2_full.pt       -> tag=stage2
+Per Overleaf Table 3 there are 5 measurement points across C0/C1/C2/C3:
 
-Outputs:
-  outputs/embeddings/projected_<tag>_image_pooled.pt
-  outputs/embeddings/projected_<tag>_text_pooled.pt
-  outputs/embeddings/projected_<tag>_image_tokens.pt   (raw 576-token tensor)
+    --condition C0_random   : random-init connector (C0 baseline)
+    --condition C1_stage2   : after C1 Stage 2 (no Stage 1 ran)
+    --condition C2_stage1   : after C2 Stage 1 (no Stage 2)
+    --condition C3_stage1   : after C3 Stage 1
+    --condition C3_stage2   : after C3 Stage 2
+
+Each writes:
+    outputs/embeddings/projected_<condition>_image_pooled.pt
+    outputs/embeddings/projected_<condition>_text_pooled.pt
+    outputs/embeddings/projected_<condition>_image_tokens.pt   (raw 257-token tensor)
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+from torch import nn
 
-from src.data.coco_loader import load_diagnostic_manifest
+from src.data.coco_val2017_loader import load_diagnostic_manifest
 from src.diagnostics.extract_projected import extract_projected_embeddings, save_projected
-from src.encoders.llm2clip_encoder import LLM2CLIPConfig, LLM2CLIPEncoder
+from src.encoders.clip_encoder import build_clip_encoder
 from src.models.checkpoint import load_projector
 from src.models.projector import build_projector
 from src.utils.io import load_yaml, snapshot_run_metadata
 from src.utils.reproducibility import set_seed
 
 
-def _resolve_tag(checkpoint_arg: str) -> str:
-    if checkpoint_arg == "random":
-        return "untrained"
-    if "stage1" in checkpoint_arg:
-        return "stage1"
-    if "stage2" in checkpoint_arg:
-        return "stage2"
-    raise ValueError(f"cannot infer tag from checkpoint path: {checkpoint_arg}")
+CONDITIONS = {
+    "C0_random":  {"connector": "random",                                       "uses_stage2": False},
+    "C1_stage2":  {"connector": "outputs/checkpoints/stage2_vlm_C1.pt",         "uses_stage2": True},
+    "C2_stage1":  {"connector": "outputs/checkpoints/stage1_connector_C2.pt",   "uses_stage2": False},
+    "C3_stage1":  {"connector": "outputs/checkpoints/stage1_connector_C3.pt",   "uses_stage2": False},
+    "C3_stage2":  {"connector": "outputs/checkpoints/stage2_vlm_C3.pt",         "uses_stage2": True},
+}
+
+
+def _load_llama_embed(hf_id: str, device: str, dtype_str: str):
+    """Materialise just the LLaMA-2 embedding lookup + tokenizer."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    dtype = getattr(torch, dtype_str)
+    tokenizer = AutoTokenizer.from_pretrained(hf_id)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(hf_id, torch_dtype=dtype)
+    weight = model.get_input_embeddings().weight.detach().clone()
+    embed = nn.Embedding.from_pretrained(weight, freeze=True).to(device)
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return embed, tokenizer
+
+
+def _load_connector_for_condition(ckpt: str, proj_cfg: dict, device: str):
+    if ckpt == "random":
+        return build_projector(proj_cfg["architecture"]).to(device)
+    blob = torch.load(ckpt, map_location="cpu")
+    # Connector ckpt is either a projector-only save (has "config") or a
+    # stage-2 VLM blob (has "connector"). Handle both.
+    if "config" in blob:
+        return load_projector(ckpt).to(device)
+    proj = build_projector(proj_cfg["architecture"])
+    proj.load_state_dict(blob["connector"])
+    return proj.to(device)
+
+
+class _EmbedLM(nn.Module):
+    """Tiny shim so extract_projected_embeddings can call get_input_embeddings()
+    on a plain nn.Embedding loaded outside of an LM."""
+    def __init__(self, embed: nn.Module):
+        super().__init__()
+        self._embed = embed
+
+    def get_input_embeddings(self):
+        return self._embed
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", required=True,
-                   help="'random' for untrained baseline, or path to projector/VLM checkpoint")
+    p.add_argument("--condition", required=True, choices=sorted(CONDITIONS))
+    p.add_argument("--connector-override", default=None,
+                   help="override the condition's default connector checkpoint path")
     p.add_argument("--encoders-config", default="configs/encoders.yaml")
     p.add_argument("--projector-config", default="configs/projector.yaml")
     p.add_argument("--llm-config", default="configs/llm.yaml")
@@ -56,43 +101,27 @@ def main():
     set_seed(data_cfg["diagnostic_sample"]["seed"])
     pairs = load_diagnostic_manifest(data_cfg["diagnostic_sample"]["manifest_path"])
 
-    encoder = LLM2CLIPEncoder(LLM2CLIPConfig(
-        vision_hf_id=enc_cfg["vision_model"]["hf_id"],
-        image_size=enc_cfg["vision_model"]["image_size"],
-        num_visual_tokens=enc_cfg["vision_model"]["num_visual_tokens"],
-        expected_vision_hidden_dim=enc_cfg["vision_model"]["expected_vision_hidden_dim"],
-        contrastive_dim=enc_cfg["vision_model"]["contrastive_dim"],
-        text_hf_id=enc_cfg["text_model"]["hf_id"],
-        llm2vec_name_workaround=enc_cfg["text_model"]["llm2vec_name_workaround"],
-        text_pooling_mode=enc_cfg["text_model"]["pooling_mode"],
-        text_max_length=enc_cfg["text_model"]["max_length"],
-        text_doc_max_length=enc_cfg["text_model"]["doc_max_length"],
-        image_processor_fallback_hf_id=enc_cfg["image_processor"]["fallback_hf_id"],
-        device=enc_cfg["inference"]["device"],
-    )).load()
+    device = enc_cfg["inference"]["device"]
+    encoder = build_clip_encoder(enc_cfg).load()
 
-    if args.checkpoint == "random":
-        projector = build_projector(proj_cfg["architecture"]).to(enc_cfg["inference"]["device"])
-    else:
-        projector = load_projector(args.checkpoint).to(enc_cfg["inference"]["device"])
+    ckpt = args.connector_override or CONDITIONS[args.condition]["connector"]
+    connector = _load_connector_for_condition(ckpt, proj_cfg, device)
 
-    tokenizer = AutoTokenizer.from_pretrained(llm_cfg["model"]["hf_id"])
-    llm = AutoModelForCausalLM.from_pretrained(
-        llm_cfg["model"]["hf_id"],
-        torch_dtype=getattr(__import__("torch"), llm_cfg["dtype"]["weights"]),
-    ).to(enc_cfg["inference"]["device"]).eval()
+    embed, tokenizer = _load_llama_embed(
+        llm_cfg["model"]["hf_id"], device=device, dtype_str=llm_cfg["dtype"]["weights"],
+    )
+    shim = _EmbedLM(embed)
 
     blob = extract_projected_embeddings(
-        encoder, projector, llm, tokenizer, pairs, batch_size=args.batch_size,
+        encoder, connector, shim, tokenizer, pairs, batch_size=args.batch_size,
     )
-    tag = _resolve_tag(args.checkpoint)
-    save_projected(blob, args.out_dir, tag)
+    save_projected(blob, args.out_dir, args.condition)
 
     snapshot_run_metadata(
-        {"checkpoint": args.checkpoint, "tag": tag, "args": vars(args)},
+        {"condition": args.condition, "connector_ckpt": ckpt, "args": vars(args)},
         Path(args.out_dir),
     )
-    print(f"[ok] saved projected embeddings tag={tag} to {args.out_dir}")
+    print(f"[ok] saved projected embeddings condition={args.condition} to {args.out_dir}")
 
 
 if __name__ == "__main__":

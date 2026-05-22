@@ -1,9 +1,14 @@
-"""Abstract encoder interface.
+"""Abstract vision-encoder interface.
 
-Both modality encoders (image and text) live behind the same ``Encoder``
-protocol so the diagnostic pipeline can swap implementations without changing
-calling code. ``LLM2CLIPEncoder`` (the only implementation in this phase) wraps
-the HuggingFace LLM2CLIP model.
+The connector ablation study (C0/C1/C2/C3) uses a single frozen vision encoder
+across all conditions. This protocol exposes only what downstream code needs:
+per-token features for the connector to consume, and the configured input size
+/ output shape.
+
+Text encoding is NOT the vision encoder's job in this experiment — the text
+side reads from LLaMA-2's frozen embedding layer (see
+``src/diagnostics/extract_projected.py`` for Stage 1 / measurement, and
+``src/models/vlm.py`` for Stage 2 splicing).
 """
 from __future__ import annotations
 
@@ -12,31 +17,28 @@ from abc import ABC, abstractmethod
 import torch
 
 
-class Encoder(ABC):
-    """Encoder interface for modality-gap diagnostics."""
-
-    @property
-    @abstractmethod
-    def output_dim(self) -> int:
-        """Dimensionality of the contrastive (L2-normalized) output space."""
+class VisionEncoder(ABC):
+    """Vision-encoder interface used by the connector and gap diagnostics."""
 
     @property
     @abstractmethod
     def vision_hidden_dim(self) -> int:
-        """Per-token hidden dim of the ViT vision tower (input to projector)."""
+        """Per-token hidden dim of the ViT (input to the connector)."""
 
+    @property
     @abstractmethod
-    def encode_image(self, images) -> torch.Tensor:
-        """Return L2-normalized contrastive image embeddings, shape (B, output_dim)."""
+    def num_visual_tokens(self) -> int:
+        """Number of tokens emitted per image (e.g. 257 for ViT-L/14 @ 224)."""
 
+    @property
     @abstractmethod
-    def encode_text(self, texts: list[str]) -> torch.Tensor:
-        """Return L2-normalized contrastive text embeddings, shape (B, output_dim)."""
+    def image_size(self) -> int:
+        """Configured square input resolution."""
 
     @abstractmethod
     def encode_image_tokens(self, images) -> torch.Tensor:
-        """Return per-token vision-tower features, shape (B, num_visual_tokens, vision_hidden_dim).
-
-        These are the features the projector ingests; distinct from
-        ``encode_image`` which returns the contrastive-pooled output.
+        """Return per-token vision-tower features of shape
+        ``(B, num_visual_tokens, vision_hidden_dim)``. The first token is the
+        CLS token; callers that want Stage-1-style CLS pooling should slice
+        ``tokens[:, 0]``.
         """

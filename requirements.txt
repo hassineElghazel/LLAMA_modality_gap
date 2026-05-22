@@ -2,8 +2,6 @@ torch==2.3.1
 torchvision==0.18.1
 transformers>=4.42,<4.45
 accelerate>=0.30
-# llm2vec is required by LLM2CLIP's text tower. Pinned per reference embed.py:343.
-llm2vec @ git+https://github.com/McGill-NLP/llm2vec.git@33d5ca9d51c695fa9dcb7e35889e2ee6051cc20a
 peft>=0.11
 bitsandbytes>=0.43
 deepspeed>=0.14
@@ -22,3 +20,4 @@ einops
 Pillow
 huggingface-hub
 datasets
+vlmeval

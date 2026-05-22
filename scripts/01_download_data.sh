@@ -1,50 +1,58 @@
 #!/usr/bin/env bash
-# Download COCO 2014 + Karpathy split + Bunny-pretrain + InternVL-Chat-V1.2-SFT.
-# Per plan §6. Total disk: ~200 GB. Network-heavy; safe to re-run (skips
-# existing files).
+# Download COCO val2017 + COCO train2017 (for LLaVA-Instruct) + Bunny-v1.1
+# (Stage 1) + LLaVA-Instruct-150K (Stage 2). Safe to re-run (skips existing).
 
 set -euo pipefail
 
 DATA_DIR="data"
-mkdir -p "$DATA_DIR/coco" "$DATA_DIR/karpathy" "$DATA_DIR/bunny_pretrain" "$DATA_DIR/internvl_sft"
+mkdir -p "$DATA_DIR/coco" "$DATA_DIR/bunny_v1_1" "$DATA_DIR/llava_instruct_150k"
 
-# ---------- COCO 2014 ----------
+# ---------- COCO val2017 (gap diagnostic + captioning eval) ----------
 COCO_DIR="$DATA_DIR/coco"
-for split in train2014 val2014; do
-  if [ ! -d "$COCO_DIR/$split" ]; then
-    echo "[data] downloading COCO $split (~13 GB)"
-    wget -c "http://images.cocodataset.org/zips/${split}.zip" -O "$COCO_DIR/${split}.zip"
-    unzip -q "$COCO_DIR/${split}.zip" -d "$COCO_DIR/"
-    rm "$COCO_DIR/${split}.zip"
-  else
-    echo "[data] COCO $split already present"
-  fi
-done
-
-# ---------- Karpathy split ----------
-KARP_JSON="$DATA_DIR/karpathy/dataset_coco.json"
-if [ ! -f "$KARP_JSON" ]; then
-  echo "[data] downloading Karpathy split"
-  # Common mirror — confirm checksum at first run.
-  wget -c "https://cs.stanford.edu/people/karpathy/deepimagesent/caption_datasets.zip" \
-    -O "$DATA_DIR/karpathy/caption_datasets.zip"
-  unzip -q "$DATA_DIR/karpathy/caption_datasets.zip" -d "$DATA_DIR/karpathy/"
-  rm "$DATA_DIR/karpathy/caption_datasets.zip"
+if [ ! -d "$COCO_DIR/val2017" ]; then
+  echo "[data] downloading COCO val2017 (~1 GB)"
+  wget -c "http://images.cocodataset.org/zips/val2017.zip" -O "$COCO_DIR/val2017.zip"
+  unzip -q "$COCO_DIR/val2017.zip" -d "$COCO_DIR/"
+  rm "$COCO_DIR/val2017.zip"
+else
+  echo "[data] COCO val2017 already present"
 fi
 
-# ---------- Bunny-pretrain 1M ----------
-if [ -z "$(ls -A "$DATA_DIR/bunny_pretrain" 2>/dev/null)" ]; then
-  echo "[data] downloading Bunny-pretrain 1M from HuggingFace"
-  huggingface-cli download BoyaWu10/Bunny-v1_0-data \
+# ---------- COCO train2017 (image source for LLaVA-Instruct-150K) ----------
+if [ ! -d "$COCO_DIR/train2017" ]; then
+  echo "[data] downloading COCO train2017 (~18 GB)"
+  wget -c "http://images.cocodataset.org/zips/train2017.zip" -O "$COCO_DIR/train2017.zip"
+  unzip -q "$COCO_DIR/train2017.zip" -d "$COCO_DIR/"
+  rm "$COCO_DIR/train2017.zip"
+else
+  echo "[data] COCO train2017 already present"
+fi
+
+# ---------- COCO 2017 annotations (val2017 captions) ----------
+if [ ! -f "$COCO_DIR/annotations/captions_val2017.json" ]; then
+  echo "[data] downloading COCO 2017 annotations"
+  wget -c "http://images.cocodataset.org/annotations/annotations_trainval2017.zip" \
+    -O "$COCO_DIR/annotations_trainval2017.zip"
+  unzip -q "$COCO_DIR/annotations_trainval2017.zip" -d "$COCO_DIR/"
+  rm "$COCO_DIR/annotations_trainval2017.zip"
+fi
+
+# ---------- Bunny-v1.1-data (Stage 1 contrastive pretraining) ----------
+if [ -z "$(ls -A "$DATA_DIR/bunny_v1_1" 2>/dev/null)" ]; then
+  echo "[data] downloading Bunny-v1.1-data from HuggingFace"
+  huggingface-cli download BoyaWu10/Bunny-v1.1-data \
     --repo-type dataset \
-    --local-dir "$DATA_DIR/bunny_pretrain" \
+    --local-dir "$DATA_DIR/bunny_v1_1" \
     --local-dir-use-symlinks False
 fi
 
-# ---------- InternVL-Chat-V1.2-SFT ----------
-if [ -z "$(ls -A "$DATA_DIR/internvl_sft" 2>/dev/null)" ]; then
-  echo "[data] InternVL-Chat-V1.2-SFT must be downloaded manually from the InternVL release."
-  echo "[data] Place the data at $DATA_DIR/internvl_sft/ and rerun."
+# ---------- LLaVA-Instruct-150K (Stage 2 autoregressive captioning) ----------
+if [ -z "$(ls -A "$DATA_DIR/llava_instruct_150k" 2>/dev/null)" ]; then
+  echo "[data] downloading LLaVA-Instruct-150K from HuggingFace"
+  huggingface-cli download liuhaotian/LLaVA-Instruct-150K \
+    --repo-type dataset \
+    --local-dir "$DATA_DIR/llava_instruct_150k" \
+    --local-dir-use-symlinks False
 fi
 
 echo "[data] done."

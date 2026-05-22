@@ -17,14 +17,15 @@ def test_default_shapes():
 
 def test_forward_shape():
     proj = build_projector()
-    x = torch.randn(2, 576, 1024)        # (batch, num_visual_tokens, in_dim)
+    # ViT-L/14 @ 224 -> 257 tokens (1 CLS + 16*16 patches), 1024-d each.
+    x = torch.randn(2, 257, 1024)
     y = proj(x)
-    assert y.shape == (2, 576, 4096)
+    assert y.shape == (2, 257, 4096)
 
 
 def test_backward_flows():
     proj = build_projector()
-    x = torch.randn(1, 576, 1024, requires_grad=True)
+    x = torch.randn(1, 257, 1024, requires_grad=True)
     y = proj(x)
     y.sum().backward()
     for name, p in proj.named_parameters():

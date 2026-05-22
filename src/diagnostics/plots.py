@@ -191,6 +191,65 @@ def figure_D_angular_topology(X, Y, out_dir: Path) -> tuple[Path, Path]:
     return _save(fig, out_dir, "figureD_angular_topology")
 
 
+# ---------- Cross-condition trajectory (spec §"Visualisation") ----------
+
+# Canonical x-axis ordering for the C0 -> C2 -> C3 trajectory plus the
+# C1 / C3-stage2 endpoints (per Overleaf Table 3).
+TRAJECTORY_ORDER = ("C0_random", "C2_stage1", "C3_stage1", "C3_stage2", "C1_stage2")
+
+
+def plot_gap_decomposition(
+    metrics_by_condition: dict[str, dict],
+    out_dir: str | Path,
+) -> Path:
+    """Multi-panel trajectory of `||beta||, ||gamma||, kappa(Sigma_U/V)` across
+    the 5 measurement points (C0_random / C2_stage1 / C3_stage1 / C3_stage2 /
+    C1_stage2). Missing conditions are silently skipped.
+    """
+    _style()
+    order = [c for c in TRAJECTORY_ORDER if c in metrics_by_condition]
+    if not order:
+        raise ValueError("no recognised conditions in metrics_by_condition")
+
+    def _series(key: str) -> list[float]:
+        return [float(metrics_by_condition[c].get(key, float("nan"))) for c in order]
+
+    beta = _series("beta_norm")
+    gamma = _series("gamma_norm")
+    kappa_img = _series("kappa_image")
+    kappa_txt = _series("kappa_text")
+    g_mu = _series("G_mu")
+    js = _series("js_divergence_angular")
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    xs = list(range(len(order)))
+
+    axes[0].plot(xs, beta, "o-", color=COLORS["before"], label="||beta|| (PMB)")
+    axes[0].plot(xs, gamma, "s-", color=COLORS["after"], label="||gamma|| (COB / G_mu)")
+    axes[0].plot(xs, g_mu, "x--", color=COLORS["baseline"], alpha=0.6, label="centroid gap G_mu")
+    axes[0].set_xticks(xs); axes[0].set_xticklabels(order, rotation=30, ha="right")
+    axes[0].set_ylabel("magnitude")
+    axes[0].set_title("Bias decomposition")
+    axes[0].legend()
+
+    axes[1].semilogy(xs, kappa_img, "o-", color=COLORS["image"], label="kappa(Sigma_U) image")
+    axes[1].semilogy(xs, kappa_txt, "s-", color=COLORS["text"], label="kappa(Sigma_V) text")
+    axes[1].set_xticks(xs); axes[1].set_xticklabels(order, rotation=30, ha="right")
+    axes[1].set_ylabel("condition number (log)")
+    axes[1].set_title("Residual anisotropy")
+    axes[1].legend()
+
+    axes[2].plot(xs, js, "o-", color=COLORS["observed"])
+    axes[2].set_xticks(xs); axes[2].set_xticklabels(order, rotation=30, ha="right")
+    axes[2].set_ylabel("JS divergence")
+    axes[2].set_title("Angular topology mismatch")
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    png, _ = _save(fig, out_dir, "gap_decomposition_trajectory")
+    return png
+
+
 # ---------- driver ----------
 
 def make_all_figures(X, Y, out_dir: str | Path) -> dict[str, tuple[Path, Path]]:

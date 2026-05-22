@@ -1,58 +1,106 @@
-"""Stage 1: projector-only pretraining (modality substitution).
+"""Stage 1: contrastive connector pre-training (InfoNCE).
 
-LLM frozen, encoder frozen, only projector params get gradients
-(~17M parameters). Feasible on 16GB GPU because no LLM gradient memory is
-needed.
+Per Overleaf spec §3:
+- **Image side**: image -> Frozen CLIP ViT-L/14 -> CLS token (1024-d) ->
+  Connector -> z_img (4096-d).
+- **Text side**: caption -> LLaMA-2 tokenizer -> LLaMA embed layer (frozen) ->
+  mean-pool over content tokens -> z_txt (4096-d).
+- **Loss**: symmetric InfoNCE with learnable temperature, tau init 0.07.
 
-Per the plan §8.2 B.1, the recipe follows the ReVision modality-substitution
-scheme over Bunny-pretrain 1M. Implementation skeleton — fill in the loss
-formulation when integrating with the reference repo (see
-`references/Yu-xm/ReVision/`).
+Trains the connector parameters + log_logit_scale only. ViT and LLaMA's embed
+layer are frozen targets.
 """
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable, Iterable, Optional
 
 import torch
 from rich.console import Console
+from torch import nn
 
+from ..encoders.clip_encoder import CLIPViTL14Encoder
 from ..models.checkpoint import save_projector
 from ..models.projector import MLP2xGELU
+from .contrastive_loss import LearnableTemperature, symmetric_infonce
 from .trainer_utils import build_adamw, cosine_with_warmup, freeze_module
 
 console = Console()
 
 
+# ----- text-side helper -------------------------------------------------
+
+def encode_text_mean_pool(
+    captions: list[str],
+    tokenizer,
+    embed_layer: nn.Module,
+    device: torch.device,
+    max_length: int = 64,
+) -> torch.Tensor:
+    """Mean-pool LLaMA-2 token embeddings over content tokens (excludes pad / BOS / EOS)."""
+    enc = tokenizer(
+        captions,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+    ).to(device)
+    embs = embed_layer(enc["input_ids"])               # (B, L, 4096)
+    mask = enc["attention_mask"].bool()
+    special = torch.zeros_like(mask)
+    if tokenizer.bos_token_id is not None:
+        special |= enc["input_ids"] == tokenizer.bos_token_id
+    if tokenizer.eos_token_id is not None:
+        special |= enc["input_ids"] == tokenizer.eos_token_id
+    content = mask & ~special                          # (B, L)
+    w = content.float().unsqueeze(-1)                  # (B, L, 1)
+    denom = w.sum(dim=1).clamp(min=1.0)                # (B, 1)
+    return (embs * w).sum(dim=1) / denom               # (B, 4096)
+
+
+# ----- training loop ----------------------------------------------------
+
 def train_stage1(
-    projector: MLP2xGELU,
-    llm: torch.nn.Module,
-    encoder,
-    text_dataloader,
+    encoder: CLIPViTL14Encoder,
+    connector: MLP2xGELU,
+    llm_embed: nn.Module,
+    tokenizer,
+    dataloader: Iterable,
     cfg: dict,
+    *,
+    max_steps: Optional[int] = None,
+    progress_cb: Optional[Callable[[int, float, float], None]] = None,
 ) -> Path:
-    """Train projector with LLM and encoder frozen.
+    """Run symmetric InfoNCE on (image, caption) batches.
 
-    Loss: language-modeling loss on text-only modality-substitution inputs
-    (per ReVision). Concrete loss assembly is delegated to caller — this
-    function provides the optimization loop, not the data formulation.
+    The ``dataloader`` is expected to yield dicts of the form
+    ``{"images": list[PIL.Image], "captions": list[str]}``.
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+    dtype_amp = torch.bfloat16 if cfg["precision"]["amp"] == "bf16" else torch.float32
 
-    freeze_module(llm)
-    freeze_module(encoder)
-    projector.to(device).train()
+    # Freeze targets. Connector + temperature are the only trainable params.
+    freeze_module(llm_embed)
+    connector.to(device).train()
+    temp = LearnableTemperature(
+        temperature_init=cfg["loss"]["temperature_init"],
+    ).to(device)
+    temp.train()
+
+    trainable_params = list(connector.parameters())
+    if cfg["loss"].get("temperature_learnable", True):
+        trainable_params += list(temp.parameters())
 
     opt_cfg = cfg["optimizer"]
     sched_cfg = cfg["schedule"]
-    total_steps = len(text_dataloader) * sched_cfg["num_epochs"]
+    n_batches = len(dataloader) if hasattr(dataloader, "__len__") else (max_steps or 1000)
+    total_steps = max_steps or (n_batches * sched_cfg["num_epochs"])
     warmup_steps = int(total_steps * sched_cfg["warmup_ratio"])
 
     optimizer = build_adamw(
-        projector.parameters(),
-        lr=opt_cfg["lr"],
-        wd=opt_cfg["weight_decay"],
-        betas=tuple(opt_cfg["betas"]),
-        eps=opt_cfg["eps"],
+        trainable_params,
+        lr=opt_cfg["lr"], wd=opt_cfg["weight_decay"],
+        betas=tuple(opt_cfg["betas"]), eps=opt_cfg["eps"],
     )
     scheduler = cosine_with_warmup(optimizer, warmup_steps, total_steps)
 
@@ -61,22 +109,50 @@ def train_stage1(
     ckpt_path = Path(cfg["output"]["checkpoint_path"])
 
     step = 0
+    done = False
     for epoch in range(sched_cfg["num_epochs"]):
-        for batch in text_dataloader:
+        if done:
+            break
+        for batch in dataloader:
             optimizer.zero_grad(set_to_none=True)
-            # NOTE: caller-provided collator must produce {"loss": <scalar>}
-            # via the modality-substitution forward. Placeholder forward:
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                out = batch["forward_fn"]()  # contract: returns object with .loss
-            loss = out.loss
+            images = batch["images"]
+            captions = batch["captions"]
+
+            # Image side: ViT -> CLS (1024) -> connector -> z_img (4096)
+            with torch.no_grad():
+                vis_tokens = encoder.encode_image_tokens(images)   # (B, 257, 1024)
+            cls = vis_tokens[:, 0, :].to(device=device, dtype=next(connector.parameters()).dtype)
+
+            with torch.amp.autocast("cuda", dtype=dtype_amp, enabled=torch.cuda.is_available()):
+                z_img = connector(cls)                              # (B, 4096)
+
+                # Text side: tokenize -> embed (frozen) -> mean pool -> z_txt
+                with torch.no_grad():
+                    z_txt = encode_text_mean_pool(
+                        captions, tokenizer, llm_embed, device=device
+                    )
+                z_txt = z_txt.to(dtype=z_img.dtype)
+
+                loss = symmetric_infonce(z_img, z_txt, temp())
+
             loss.backward()
             optimizer.step()
             scheduler.step()
             step += 1
-            if step % log_every == 0:
-                console.log(f"[stage1] epoch={epoch} step={step} loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.2e}")
-            if save_every and step % save_every == 0:
-                save_projector(projector, ckpt_path)
 
-    save_projector(projector, ckpt_path)
+            if step % log_every == 0:
+                console.log(
+                    f"[stage1] epoch={epoch} step={step} "
+                    f"loss={loss.item():.4f} tau={temp.temperature:.4f} "
+                    f"lr={scheduler.get_last_lr()[0]:.2e}"
+                )
+            if progress_cb is not None:
+                progress_cb(step, float(loss.item()), float(temp.temperature))
+            if save_every and step % save_every == 0:
+                save_projector(connector, ckpt_path)
+            if max_steps is not None and step >= max_steps:
+                done = True
+                break
+
+    save_projector(connector, ckpt_path)
     return ckpt_path

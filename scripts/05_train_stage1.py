@@ -1,30 +1,62 @@
-"""Stage 1 projector pretraining entry point.
+"""Stage 1: contrastive connector pre-training (InfoNCE).
 
-Skeleton that wires config + components into ``train_stage1``. The data
-collator / forward construction for modality substitution must be supplied in
-``_build_dataloader`` once the Bunny manifest schema is verified at first
-download.
+Trains the connector with symmetric InfoNCE on Bunny-v1.1 image-caption pairs.
+ViT (CLIP ViT-L/14) and the LLaMA-2 embedding layer are frozen. Only the
+connector parameters + the learnable log-temperature receive gradients.
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Iterator
 
+import torch
+from torch import nn
+
+from src.data.bunny_v1_1_loader import BunnyV11Dataset, load_image
+from src.encoders.clip_encoder import build_clip_encoder
 from src.models.projector import build_projector
 from src.training.stage1_pretrain import train_stage1
 from src.utils.io import load_yaml, snapshot_run_metadata
 from src.utils.reproducibility import set_seed
 
 
-def _build_dataloader(cfg):
-    """Construct text-only DataLoader for modality substitution.
-
-    Placeholder: returns a callable that raises until wired up. The plan calls
-    this out — Bunny schema is verified at first download (§6.3).
+def _load_llama_embed(hf_id: str, device: str, dtype_str: str) -> tuple[nn.Module, "AutoTokenizer"]:
+    """Extract just the LLaMA-2 embedding layer and tokenizer (rest is unused
+    in Stage 1; we drop the LM weights to stay under the 16GB dev-GPU budget).
     """
-    raise NotImplementedError(
-        "Wire up Bunny modality-substitution dataloader once the dataset schema is verified."
-    )
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    dtype = getattr(torch, dtype_str)
+    tokenizer = AutoTokenizer.from_pretrained(hf_id)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(hf_id, torch_dtype=dtype)
+    embed = model.get_input_embeddings()
+    # Copy weights out so we can drop the rest of the LM and free memory.
+    weight = embed.weight.detach().clone()
+    new_embed = nn.Embedding.from_pretrained(weight, freeze=True).to(device)
+    del model, embed
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return new_embed, tokenizer
+
+
+def _iter_batches(dataset: BunnyV11Dataset, batch_size: int) -> Iterator[dict]:
+    """Lazily collate Bunny pairs into ``{"images": list, "captions": list}``."""
+    buf_imgs, buf_caps = [], []
+    for pair in dataset:
+        try:
+            img = load_image(pair.image_path)
+        except FileNotFoundError:
+            continue
+        buf_imgs.append(img)
+        buf_caps.append(pair.caption)
+        if len(buf_imgs) == batch_size:
+            yield {"images": buf_imgs, "captions": buf_caps}
+            buf_imgs, buf_caps = [], []
+    if buf_imgs:
+        yield {"images": buf_imgs, "captions": buf_caps}
 
 
 def main():
@@ -33,18 +65,43 @@ def main():
     p.add_argument("--projector-config", default="configs/projector.yaml")
     p.add_argument("--encoders-config", default="configs/encoders.yaml")
     p.add_argument("--llm-config", default="configs/llm.yaml")
+    p.add_argument("--data-config", default="configs/data.yaml")
+    p.add_argument("--max-steps", type=int, default=None, help="cap training at N steps (smoke runs)")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
     proj_cfg = load_yaml(args.projector_config)
+    enc_cfg = load_yaml(args.encoders_config)
+    llm_cfg = load_yaml(args.llm_config)
+    data_cfg = load_yaml(args.data_config)
     set_seed(cfg["seed"])
 
-    projector = build_projector(proj_cfg["architecture"])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    cfg["device"] = device
 
-    # Encoder + LLM construction left to wire-up once the dataloader is ready.
-    raise SystemExit(
-        "Stub: encoder/LLM/dataloader wire-up pending. Verify Bunny schema first."
+    encoder = build_clip_encoder(enc_cfg).load()
+    connector = build_projector(proj_cfg["architecture"])
+    llm_embed, tokenizer = _load_llama_embed(
+        llm_cfg["model"]["hf_id"],
+        device=device,
+        dtype_str=llm_cfg["dtype"]["weights"],
     )
+
+    bunny_cfg = data_cfg["bunny_v1_1"]
+    dataset = BunnyV11Dataset(root=bunny_cfg["local_path"])
+    dataloader = _iter_batches(dataset, cfg["batch"]["per_device_batch_size"])
+
+    ckpt = train_stage1(
+        encoder=encoder,
+        connector=connector,
+        llm_embed=llm_embed,
+        tokenizer=tokenizer,
+        dataloader=dataloader,
+        cfg=cfg,
+        max_steps=args.max_steps,
+    )
+    snapshot_run_metadata({"stage1": cfg, "args": vars(args)}, Path(cfg["output"]["log_dir"]))
+    print(f"[ok] Stage 1 connector checkpoint: {ckpt}")
 
 
 if __name__ == "__main__":

@@ -1,156 +1,134 @@
-# Modality Gap Captioning — Diagnostic Phase
+# Measuring the Modality Gap in MLLMs — Connector Ablation Study
 
 > Master thesis project — Data Science & Engineering, a.y. 2025–2026
 
-Diagnostic-phase pipeline for measuring the **modality gap** in a Llama-3 + LLM2CLIP
-multimodal large language model (MLLM), plus a zero-shot captioning baseline on COCO
-Karpathy.
+A four-condition ablation study isolating where the **modality gap** is opened or closed
+in a CLIP-ViT → MLP-connector → LLaMA-2 multimodal LLM. The gap is measured at the
+**connector output** (4096-dim LLM input-embedding space) — the only point in the
+forward pass where image tokens and text tokens are commensurate.
 
 ---
 
-## Research Context
+## Research question
 
-The **modality gap** is the empirical observation that, in contrastively trained encoders
-(e.g. CLIP), image and text embeddings occupy *separate, non-overlapping cones* in the
-shared representation space rather than being uniformly mixed.
-Liang et al. (2022) established this for CLIP; more recent work extends the analysis to
-the anisotropic structure of the residual vectors (after removing the centroid offset).
+The papers that characterize the modality gap (Liang 2022; ReAlign; AnisoAlign) measure
+it in CLIP-style contrastive spaces. Inside an MLLM, image and text only meet **after**
+the connector has projected vision features into the LLM's input space. The thesis asks:
 
-This project reproduces and extends the architecture from two papers:
+> Which training stage — contrastive Stage-1 pretraining of the connector, or
+> instruction-tuning Stage-2 — actually closes the gap at the LLM-input boundary?
+> And does either stage trade gap-closure against downstream task quality?
 
-| Paper | arXiv | Key contribution |
-|---|---|---|
-| **ReAlign** — Yu et al., 2026a | [2602.07026](https://arxiv.org/abs/2602.07026) | Theoretical analysis of modality gap in MLLMs + alignment correction |
-| **AnisoAlign** — Yu et al., 2026b | [2605.07825](https://arxiv.org/abs/2605.07825) | Anisotropic residual structure; `d_eff`, `A_r` metrics |
-| **Modality Gap** — Liang et al., 2022 | [2203.02053](https://arxiv.org/abs/2203.02053) | Original gap characterization in CLIP |
+The 4-condition design factorizes Stage-1 and Stage-2 to attribute each effect.
 
-### Experiment contribution
+| Condition | Stage 1 (InfoNCE pretrain) | Stage 2 (LoRA SFT) | Measured at | Downstream eval |
+|---|---|---|---|---|
+| **C0** | — (random connector) | — | random connector | none (no trained LLM) |
+| **C1** | — | LLaVA-Instruct-150K | post-Stage-2 connector | captioning + VLMEvalKit |
+| **C2** | Bunny-v1.1 InfoNCE | — | post-Stage-1 connector | captioning + VLMEvalKit |
+| **C3** | Bunny-v1.1 InfoNCE | LLaVA-Instruct-150K | post-Stage-1 **and** post-Stage-2 | captioning + VLMEvalKit |
 
-The papers measure the modality gap at **one point**: the encoder's contrastive output
-space (768-dim, L2-normalized). This project measures it at **two points**:
-
-1. **Encoder space** — `LLM2CLIP` shared 768-dim contrastive space. Same as papers.
-2. **Projected-token space** — Llama-3 input embedding space (4096-dim), *after* the MLP
-   projector has mapped vision tokens into the LLM. This is what actually reaches the
-   LLM's attention layers.
-
-Tracking how the projected-token gap evolves across three training checkpoints
-(random-init projector → Stage 1 pretrained → Stage 2 fine-tuned) is the central
-empirical question for this experiment.
-
-### Architecture diagrams
-
-The system has three conceptually distinct paths through the model: the
-**inference pipeline** that produces captions, and the **two gap-measurement
-taps** at the encoder and projected-token spaces. Each is shown separately
-below.
-
-#### 1 — Inference pipeline (what the model does at runtime)
-
-This is the only path the model uses to generate a caption. It does **not**
-mean-pool anything — the 576 visual tokens are kept and spliced into the LLM's
-input sequence at the image-token position.
-
-```mermaid
-flowchart LR
-    IMG([Image]) --> VT["ViT-L/14-336<br/>vision tower · frozen"]
-    VT -->|"576 × 1024-dim<br/>patch tokens"| PROJ["MLP Projector<br/>1024 → 4096 → 4096<br/>~17 M params · trained in Stage B"]
-    PROJ -->|"576 × 4096-dim<br/>visual tokens"| SPL["Splice visual tokens<br/>at image-token position"]
-    PRMT([Text prompt]) -->|"tokenize → embed_tokens"| SPL
-    SPL --> LLM["Llama-3-8B-Instruct<br/>frozen in B.1 · full FT in B.2"]
-    LLM --> OUT([Caption])
-```
-
-#### 2 — Measurement point ① · encoder space, d = 768
-
-For each (image, caption) pair in the 10 K COCO-Karpathy diagnostic split we run
-**both modalities through LLM2CLIP's contrastive heads** and L2-normalize. The
-two resulting 768-dim vectors become row `i` of `X` (image) and row `i` of `Y`
-(text). This is the gap the ReAlign / AnisoAlign papers measure.
-
-```mermaid
-flowchart LR
-    IMG([Image i]) --> VTC["LLM2CLIP vision tower<br/>get_image_features<br/>L2-norm"]
-    CAP([Caption i]) --> TTC["LLM2CLIP text tower<br/>Llama-3-CC + LLM2Vec mean-pool<br/>get_text_features · L2-norm"]
-    VTC --> XI["X[i] ∈ ℝ⁷⁶⁸<br/>image row"]
-    TTC --> YI["Y[i] ∈ ℝ⁷⁶⁸<br/>text row"]
-    XI -.->|"stack n = 10 K rows"| GAP1[["G_μ · G_Σ · C_λ · A_r · …<br/>computed on (X, Y)"]]
-    YI -.-> GAP1
-```
-
-#### 3 — Measurement point ② · projected-token space, d = 4096
-
-This is the gap **inside the LLM's input embedding space** — the one the papers
-don't measure. The image side is taken from the projector output; the text side
-is taken from Llama-3's `embed_tokens` lookup table. Both sides are mean-pooled
-to a single 4096-dim vector per sample. **The text path here does not invoke
-the LLM's transformer layers at all — it only touches the embedding table.**
-
-```mermaid
-flowchart LR
-    IMG([Image i]) --> VT["ViT-L/14-336<br/>vision tower"]
-    VT -->|"576 × 1024-dim"| PROJ["MLP Projector<br/>→ 576 × 4096-dim"]
-    PROJ --> MPI["mean-pool over<br/>576 visual tokens"]
-    MPI --> XI["X[i] ∈ ℝ⁴⁰⁹⁶<br/>image row"]
-
-    CAP([Caption i]) --> TOK["Llama-3 tokenizer<br/>→ N token IDs"]
-    TOK --> EMB["Llama-3 embed_tokens<br/>lookup → N × 4096-dim"]
-    EMB --> MPT["mean-pool over<br/>N caption tokens"]
-    MPT --> YI["Y[i] ∈ ℝ⁴⁰⁹⁶<br/>text row"]
-
-    XI -.->|"stack n = 10 K rows"| GAP2[["G_μ · G_Σ · C_λ · A_r · …<br/>computed on (X, Y)"]]
-    YI -.-> GAP2
-```
-
-The image side of ② is repeated across **three checkpoints of the projector**
-(random-init, Stage B.1, Stage B.2) to trace how the gap evolves with training.
-The text side is invariant across those runs in Stage B.1 (LLM frozen) and may
-shift in Stage B.2 (full LLM fine-tuning unfreezes `embed_tokens`).
+C3 contributes **two** measurements (post-Stage-1 and post-Stage-2) so the Stage-2
+contribution can be isolated within the same training trajectory.
 
 ---
 
-## Architecture (locked)
-
-All components are chosen to match the ReAlign / AnisoAlign papers exactly. Deviating
-from these choices makes comparisons against paper numbers meaningless.
+## Architecture
 
 | Component | Choice |
 |---|---|
-| Vision encoder | `microsoft/LLM2CLIP-Openai-L-14-336` (HuggingFace) |
-| LLM backbone | `meta-llama/Meta-Llama-3-8B-Instruct` (HuggingFace) |
-| Projector | 2-layer MLP + GELU; in=1024, hidden=4096, out=4096 (~17M params) |
-| Stage 1 data | Bunny-pretrain 1M — `BoyaWu10/Bunny-v1_0-data` |
-| Stage 2 data | InternVL-Chat-V1.2-SFT |
-| Diagnostic dataset | COCO Karpathy split — 10 K paired (image, caption) |
-| Eval | COCO Karpathy test 5 K — CIDEr / BLEU-4 / METEOR / SPICE |
+| Vision encoder | `openai/clip-vit-large-patch14` @ 224² · frozen |
+| Visual tokens | 257 × 1024 (CLS + 16×16 patches) |
+| Connector | 2-layer MLP + GELU; `1024 → 4096 → 4096` (~17 M params) |
+| LLM | `meta-llama/Llama-2-7b-hf` · frozen weights, LoRA-tunable in Stage 2 |
+| Stage 1 loss | Symmetric InfoNCE with learnable temperature τ (init `1/0.07`) |
+| Stage 1 image side | `mean_pool(connector(ViT(image)))` → ℝ⁴⁰⁹⁶ |
+| Stage 1 text side | `mean_pool(llama_embed(tokenize(caption)))` → ℝ⁴⁰⁹⁶ |
+| Stage 2 loss | AR cross-entropy on text positions only (visual tokens masked) |
+| Stage 2 adaptation | LoRA r=16, α=32, dropout 0.05 on `{q,k,v,o,gate,up,down}_proj` |
+| Stage 1 data | `BoyaWu10/Bunny-v1.1-data` (~2 M image-caption pairs) |
+| Stage 2 data | `liuhaotian/LLaVA-Instruct-150K` |
+| Diagnostic + eval set | COCO val2017 (5 K images, 5 reference captions each) |
 
-### LLM2CLIP two-checkpoint architecture
+### Inference pipeline
 
-LLM2CLIP is **not** a single HuggingFace model. It uses two separate checkpoints:
+```mermaid
+flowchart LR
+    IMG([Image]) --> VT["CLIP ViT-L/14 @ 224²<br/>frozen"]
+    VT -->|"257 × 1024"| PROJ["MLP Connector<br/>1024 → 4096 → 4096"]
+    PROJ -->|"257 × 4096"| SPL["Splice at &lt;image&gt; token"]
+    PRMT([Text prompt]) -->|"tokenize → embed"| SPL
+    SPL --> LLM["LLaMA-2-7B + LoRA"]
+    LLM --> OUT([Caption / answer])
+```
 
-- **Vision tower** — `microsoft/LLM2CLIP-Openai-L-14-336`: a fine-tuned CLIP ViT-L/14
-  with a contrastive projection head that maps 1024-dim ViT tokens to 768-dim.
-- **Text tower** — `microsoft/LLM2CLIP-Llama-3-8B-Instruct-CC-Finetuned`: a CC-finetuned
-  Llama-3 wrapped via the `llm2vec` library (mean-pooling over tokens), followed by the
-  vision tower's `get_text_features` head to project into the same 768-dim space.
+### Gap measurement (connector output)
 
-The `LLM2CLIPEncoder` in `src/encoders/llm2clip_encoder.py` mirrors the reference
-`embed.py` pipeline from `Yu-xm/ReVision` exactly, including the `LLM2Vec`
-name-workaround required by its tokenizer.
+For each (image, caption) pair in the COCO val2017 diagnostic sample we form one row of
+`X` (image side) and one row of `Y` (text side) in ℝ⁴⁰⁹⁶:
 
-### Projector input dimension
+```mermaid
+flowchart LR
+    IMG([Image i]) --> VT["CLIP ViT-L/14"]
+    VT --> PROJ["MLP Connector"]
+    PROJ --> POOL1["mean-pool / CLS-pool<br/>over 257 tokens"]
+    POOL1 --> XI["X[i] ∈ ℝ⁴⁰⁹⁶"]
 
-The projector ingests **vision-tower token features, not contrastive embeddings**.
-ViT-L/14 produces 576 tokens of 1024-dim (the `last_hidden_state` minus the CLS token).
-The 768-dim contrastive output of the vision tower is a separate linear projection used
-only for gap measurement in encoder space — the projector never sees it.
+    CAP([Caption i]) --> TOK["LLaMA-2 tokenizer"]
+    TOK --> EMB["LLaMA-2 embed_tokens"]
+    EMB --> POOL2["mean-pool over caption tokens"]
+    POOL2 --> YI["Y[i] ∈ ℝ⁴⁰⁹⁶"]
 
-### Float64 precision requirement
+    XI -.->|"stack 5 K rows"| METRICS[["Spec metrics<br/>computed on (X, Y)"]]
+    YI -.-> METRICS
+```
 
-All gap-diagnostic embeddings are stored and computed in **Float64**.
-Float32 accumulation introduces a ~10⁻⁸ error floor (documented in ReAlign Appendix E.2)
-that contaminates centroid and covariance-based metrics. The `metrics.py` module enforces
-this via `_to_f64()` at every entry point.
+All eigendecompositions and inner products are performed in **Float64** on CPU via
+`scipy.linalg.eigh`. The Float64 boundary is enforced at the entry of every metric
+function (`_to_f64`).
+
+---
+
+## Diagnostic metrics
+
+Implemented in `src/diagnostics/metrics.py`. The spec's canonical metric set:
+
+| Symbol | Name | Formula sketch |
+|---|---|---|
+| `G_mu` | Centroid gap | `‖μ_x − μ_y‖₂` |
+| `alpha` | Power-law exponent | log-log slope of sorted eigenvalues of Σ_x (and Σ_y) |
+| `JS_angular` | Angular JS divergence | Jensen-Shannon between pairwise-cosine-angle histograms of the two modalities |
+| `kNN_mix` | kNN mixing rate | fraction of k=20 neighbours from the *other* modality |
+| `||β||` | Pair-mean bias | `‖(1/n) Σᵢ (xᵢ − yᵢ)‖₂` |
+| `||γ||` | Centroid-of-bias residual | per-pair bias energy beyond the global centroid offset |
+| `κ(Σ_U)` | Image covariance condition number | `λ_max(Σ_x) / λ_min(Σ_x)` (clamped) |
+| `κ(Σ_V)` | Text covariance condition number | `λ_max(Σ_y) / λ_min(Σ_y)` |
+| `eff_rank_x`, `eff_rank_y` | Effective rank | `tr(Σ)² / tr(Σ²)` for each modality |
+| `tr(Σ_x)`, `tr(Σ_y)` | Trace | total variance per modality |
+
+`GapMetrics` (a dataclass) serializes the canonical set to JSON; legacy metrics
+(`G_Sigma`, `A_r`, `O_q`, …) are preserved in an `extras` field for cross-checks.
+
+The trajectory plot `plot_gap_decomposition` overlays `‖β‖, ‖γ‖, κ(Σ_U), κ(Σ_V)`
+across the five measurement points (C0 → C1 → C2 → C3-stage1 → C3-stage2).
+
+---
+
+## Downstream evaluation
+
+**Captioning quality** (COCO val2017, pycocoevalcap):
+CIDEr (primary), BLEU-4, METEOR, SPICE.
+
+**VLMEvalKit benchmarks** (`src/evaluation/vlmevalkit_adapter.py`):
+
+| Group | Benchmarks |
+|---|---|
+| General perception | MME · MMStar · ScienceQA_VAL (image) · RealWorldQA |
+| Complex reasoning | MMMU_DEV_VAL · MMMU_Pro · VisuLogic · LogicVista |
+| Hallucination | CRPE · POPE · HallusionBench |
+
+C0 has no trained LLM and is skipped for downstream eval; C1/C2/C3 all run the full
+suite.
 
 ---
 
@@ -158,233 +136,126 @@ this via `_to_f64()` at every entry point.
 
 ```
 configs/
-  encoders.yaml           LLM2CLIP encoder config (dims, HF ids, device)
-  projector.yaml          MLP projector config (in/hidden/out dims)
-  llm.yaml                LLM backbone config (HF id, dtype, image token)
-  data.yaml               Dataset paths and splits
-  captioning.yaml         Inference / generation config
-  training_stage1.yaml    Stage 1 optimizer, schedule, batch, DeepSpeed
-  training_stage2.yaml    Stage 2 optimizer, schedule, batch, LoRA fallback
-  deepspeed/
-    zero2.json            ZeRO-2 config (Stage 1 + Stage 2 default)
-    zero3.json            ZeRO-3 config (Stage 2 OOM fallback on 40GB A100)
+  encoders.yaml             CLIP ViT-L/14 @ 224 config
+  projector.yaml            MLP connector: 1024 → 4096 → 4096
+  llm.yaml                  LLaMA-2-7B config (HF id, dtype, <image> token)
+  data.yaml                 Bunny-v1.1 · LLaVA-Instruct-150K · COCO val2017 paths
+  captioning.yaml           Generation + COCO val2017 eval config
+  training_stage1.yaml      InfoNCE schedule, learnable τ
+  training_stage2.yaml      LoRA targets, hyperparameters
+  deepspeed/{zero2,zero3}.json
 
 src/
   encoders/
-    base.py               Abstract Encoder interface
-    llm2clip_encoder.py   LLM2CLIP two-checkpoint wrapper (vision + text)
+    base.py                 VisionEncoder protocol
+    clip_encoder.py         Plain CLIP ViT-L/14 wrapper → (B, 257, 1024)
   models/
-    projector.py          MLP2xGELU projector (2-layer, GELU, ~17M params)
-    vlm.py                Full VLM: encoder + projector + Llama-3 splice
-    checkpoint.py         Save / load helpers for projector checkpoints
-  diagnostics/
-    extract_embeddings.py Extract encoder-space (768-dim) embeddings to disk
-    extract_projected.py  Extract projected-token-space (4096-dim) embeddings
-    metrics.py            All gap metrics — Float64, parameterized by d
-    plots.py              Figures: centroid scatter, residual energy curves, UMAP
+    projector.py            MLP2xGELU (1024 → 4096 → 4096)
+    vlm.py                  Encoder + connector + LLaMA-2 splice
+    checkpoint.py           Save/load helpers
   data/
-    coco_loader.py        COCO Karpathy loader (paired image + caption)
-    bunny_loader.py       Bunny-pretrain 1M loader for Stage 1
-    internvl_loader.py    InternVL SFT loader for Stage 2
-    transforms.py         Image pre-processing utilities
+    coco_val2017_loader.py  5 K val images + 5 references each + diagnostic sampler
+    bunny_v1_1_loader.py    Bunny-v1.1 image-caption pairs (Stage 1)
+    llava_instruct_loader.py  LLaVA-Instruct-150K conversations (Stage 2)
+    transforms.py           Image preprocessing (224 default)
   training/
-    stage1_pretrain.py    Stage 1 training loop (projector-only, LLM frozen)
-    stage2_sft.py         Stage 2 training loop (full FT or LoRA fallback)
-    trainer_utils.py      Gradient accumulation, logging, checkpoint saving
+    contrastive_loss.py     LearnableTemperature + symmetric InfoNCE
+    stage1_pretrain.py      InfoNCE pretraining loop
+    stage2_sft.py           LoRA SFT loop
+    trainer_utils.py        AdamW + cosine schedule + freeze helpers
+  diagnostics/
+    extract_projected.py    Per-condition (image, text) row extraction in ℝ⁴⁰⁹⁶
+    metrics.py              Spec metrics + Float64 discipline
+    plots.py                Per-condition figures + trajectory plot
   captioning/
-    inference.py          Batched caption generation via VLM.generate()
-    evaluation.py         pycocoevalcap scoring (CIDEr, BLEU-4, METEOR, SPICE)
-  utils/
-    reproducibility.py    Seed setting, deterministic flags
-    distributed.py        DeepSpeed / accelerate helpers
-    io.py                 JSON / YAML / numpy I/O
+    inference.py            VLM.generate loop over COCO val2017
+    evaluation.py           Generic pycocoevalcap scorer
+  evaluation/
+    vlmevalkit_adapter.py   LlamaConnectorVLM adapter for VLMEvalKit
+  utils/{io,reproducibility,distributed}.py
 
-scripts/                  Numbered CLI entry points — run in order
-  00_setup_env.sh         Install dependencies, verify CUDA, check HF access
-  01_download_data.sh     Download COCO + Bunny + InternVL SFT + Karpathy JSON
-  02_extract_embeddings.py  Stage A — encoder-space embeddings
-  03_compute_gap.py         Stages A + C — run all gap metrics, write JSON
-  04_make_plots.py          Stages A + C — figures for each measurement point
-  05_train_stage1.py        Stage B.1 — projector pretraining
-  06_train_stage2.py        Stage B.2 — visual instruction tuning
-  07_extract_projected.py   Stage C — projected-token-space embeddings × 3 ckpts
-  08_run_captioning.py      Stage D — caption generation on Karpathy test 5K
-  09_score_captions.py      Stage D — CIDEr / BLEU-4 / METEOR / SPICE scoring
+scripts/
+  00_setup_env.sh
+  01_download_data.sh       COCO val2017 + train2017 + Bunny-v1.1 + LLaVA-Instruct-150K
+  03_compute_gap.py         Per-condition gap metrics → JSON
+  04_make_plots.py          Per-condition figures + trajectory
+  05_train_stage1.py        InfoNCE pretraining
+  06_train_stage2.py        LoRA SFT
+  07_extract_projected.py   --condition {C0,C1_stage2,C2_stage1,C3_stage1,C3_stage2}
+  08_run_captioning.py      --condition <tag> → captions_<tag>.json
+  09_score_captions.py      --condition <tag> → captioning_<tag>.json
+  10_run_vlmevalkit.py      --condition <tag> → vlmevalkit_<tag>.json
+  run_condition.py          End-to-end orchestrator for C0/C1/C2/C3
 
 tests/
-  test_encoders.py          Encoder interface + output shape / norm checks
-  test_projector.py         MLP forward shape + parameter count
-  test_metrics.py           All gap metrics — known-answer fixtures in Float64
-  test_data_loader.py       COCO / Bunny / InternVL loader smoke tests
-
-references/               Vendored paper repos (tracked, not gitignored)
-  Modality-Gap/            Liang et al. 2022 — original gap code + figures
-  Modality_Gap_Theory/     Yu et al. AnisoAlign — embed_ReAlign.py pipeline
-  ReVision/                Yu et al. ReVision — Bunny-style VLM + embed.py
-  Unicorn/                 Yu et al. Unicorn — additional reference
-
-outputs/                  Generated at runtime — gitignored
-  embeddings/              .npy files — encoder-space and projected-token-space
-  metrics/                 .json gap-metric summaries per measurement point
-  figures/                 Plots and UMAP visualizations
-  predictions/             caption JSON for Karpathy test 5K
-  checkpoints/             stage1_projector.pt, stage2_full.pt
-  logs/                    Training logs, pip freeze, config snapshots
-
-data/                     Datasets — gitignored except karpathy split JSON
+  test_clip_encoder.py
+  test_projector.py
+  test_contrastive_loss.py
+  test_metrics.py
+  test_data_loader.py
+  test_conditions.py        Dry-run smoke for the 4-condition orchestrator
 ```
 
 ---
 
-## How the modality gap is measured
-
-The gap metrics consume two paired matrices `X, Y ∈ ℝ^{n × d}`, one row per
-sample, with row `i` of `X` and row `i` of `Y` corresponding to the same
-(image, caption) pair. The pairing comes from a 10 K subsample of COCO Karpathy.
-
-The two measurement points differ only in **how** each row of `X` and `Y` is
-obtained:
-
-| | Measurement point ① (encoder, d = 768) | Measurement point ② (projected-token, d = 4096) |
-|---|---|---|
-| **Image row** `X[i]` | `LLM2CLIP vision tower → get_image_features → L2-norm` | `vision tower → 576 × 1024-dim tokens → MLP projector → 576 × 4096-dim → mean-pool over tokens` |
-| **Text row** `Y[i]` | `LLM2CLIP text tower (LLM2Vec mean-pool) → get_text_features → L2-norm` | `Llama-3 tokenizer → embed_tokens (4096-dim lookup) → mean-pool over caption tokens` |
-| Float32/Float64 boundary | model forward in bf16; cast to **Float64** before saving `.npy` | same — Float64 cast at extraction-script boundary |
-| Code path | `src/diagnostics/extract_embeddings.py` | `src/diagnostics/extract_projected.py` |
-
-The text side at ② comes from **Llama-3's own input embedding table** (not from
-LLM2CLIP). Conceptually: the projector's job is to map visual features into the
-region of 4096-dim space that Llama-3 already uses for text. The gap at ②
-measures how well it succeeds. Across the three checkpoints (random init →
-Stage 1 → Stage 2) we get a *trajectory* showing whether training closes the gap.
-
----
-
-## Diagnostic metrics suite
-
-All metrics are implemented as pure functions in `src/diagnostics/metrics.py`,
-parameterized by ambient dimension `d` (768 for encoder space, 4096 for projected-token
-space). All eigendecompositions use `scipy.linalg.eigh` on CPU in Float64.
-
-| Symbol | Name | Meaning |
-|---|---|---|
-| `G_mu` | Centroid gap | `‖μ_image − μ_text‖₂` — rigid offset between cloud centers |
-| `G_Sigma` | Covariance shape discrepancy | `‖Σ_x − Σ_y‖_F / ‖Σ_x‖_F` — shape mismatch |
-| `C_lambda` | Spectral correlation | Pearson corr of log-eigenvalue spectra — structural alignment |
-| `A_r` | Anisotropy ratio | `λ_max(Σ_r) / (tr(Σ_r)/d)` — how needle-like the residual is; isotropic baseline = 1 |
-| `d_eff` | Effective dimension | `tr(Σ_r)² / tr(Σ_r²)` — participation ratio; isotropic baseline = d |
-| `d_eff/d` | Relative effective dimension | `d_eff / d` — dimensionless, comparable across spaces |
-| `residual_ratio` | Residual dominance | `tr(Σ_r) / (‖G_mu‖² + tr(Σ_r))` — gap variance not explained by centroid |
-| `knn_mixing_rate` | kNN mixing rate | Fraction of k=20 nearest neighbors from the *other* modality; near 0 = fully separated |
-| `O_q` | Subspace overlap | `(1/q) ‖U_x^q ᵀ U_y^q‖_F²` for top-q PCA subspaces; random baseline = q/d |
-
-`GapMetrics` (a dataclass) collects all scalars and serializes to JSON alongside
-every run. The `residual_energy_curve` (cumulative eigenvalue fraction vs. K) is
-also stored for plotting.
-
----
-
-## Pipeline overview
-
-| Stage | Script(s) | What |
-|---|---|---|
-| **A** | `02`, `03`, `04` | Extract encoder-space embeddings; compute + plot all gap metrics |
-| **B.1** | `05` | Projector pretraining on Bunny 1M (LLM + encoder frozen) |
-| **B.2** | `06` | Full visual instruction tuning on InternVL SFT |
-| **C** | `07`, `03`, `04` | Extract projected-token embeddings × 3 checkpoints; compute + plot |
-| **D** | `08`, `09` | Zero-shot captioning on Karpathy test 5K; CIDEr / BLEU-4 / METEOR / SPICE |
-
-
-## Setup and usage
+## Setup
 
 ### Prerequisites
 
-- Python 3.10 (exact — `requires-python = ">=3.10,<3.11"`)
-- CUDA 12.1+ recommended
-- HuggingFace account with access to `meta-llama/Meta-Llama-3-8B-Instruct` (gated)
-- ~200 GB free disk (COCO + Bunny 1M + InternVL SFT + checkpoints + embeddings)
+- Python 3.10
+- CUDA 12.1+ recommended; bf16-capable GPU
+- HuggingFace account with access to `meta-llama/Llama-2-7b-hf` (gated)
+- ~150 GB free disk for datasets and checkpoints
 
-### Environment setup
-
-```bash
-bash scripts/00_setup_env.sh    # creates venv, installs deps, verifies CUDA + HF token
-bash scripts/01_download_data.sh  # downloads datasets to data/
-```
-
-Or install manually:
+### Install
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[train,dev]"
+bash scripts/01_download_data.sh
 ```
 
-Note: `llm2vec` is pinned to a specific commit
-(`33d5ca9d51c695fa9dcb7e35889e2ee6051cc20a`) required by LLM2CLIP's text tower.
-It is installed from git automatically.
+---
 
-### Stage A — encoder-space gap diagnostics
+## Running the ablation
+
+Each condition is fully orchestrated by `scripts/run_condition.py`:
 
 ```bash
-python scripts/02_extract_embeddings.py --config configs/encoders.yaml
-python scripts/03_compute_gap.py --measurement-point encoder
-python scripts/04_make_plots.py --measurement-point encoder
+python scripts/run_condition.py --condition C0   # random connector — gap only
+python scripts/run_condition.py --condition C1   # Stage 2 from random connector
+python scripts/run_condition.py --condition C2   # Stage 1 only, zero-shot LLM
+python scripts/run_condition.py --condition C3   # Stage 1 → Stage 2
 ```
 
-Outputs: `outputs/embeddings/encoder_{image,text}.npy`,
-`outputs/metrics/encoder_gap.json`, `outputs/figures/encoder_*.{png,pdf}`
-
-### Stage B — training
+Per-step invocation is also supported:
 
 ```bash
-# Stage 1: projector pretraining (~17M params, LLM + encoder frozen)
+# Stage 1 InfoNCE pretraining
 python scripts/05_train_stage1.py --config configs/training_stage1.yaml
 
-# Stage 2: full visual instruction tuning (A100 required)
-python scripts/06_train_stage2.py --config configs/training_stage2.yaml
+# Stage 2 LoRA SFT (init from Stage 1 connector for C3, from random for C1)
+python scripts/06_train_stage2.py --config configs/training_stage2.yaml \
+       --stage1-checkpoint outputs/checkpoints/stage1_connector.pt
+
+# Gap measurement per condition
+python scripts/07_extract_projected.py --condition C3_stage1
+python scripts/03_compute_gap.py --condition C3_stage1
+python scripts/04_make_plots.py --condition C3_stage1
+
+# Downstream
+python scripts/08_run_captioning.py --condition C3_stage2 \
+       --vlm-checkpoint outputs/checkpoints/stage2_vlm_C3.pt
+python scripts/09_score_captions.py --condition C3_stage2
+python scripts/10_run_vlmevalkit.py --condition C3_stage2 \
+       --vlm-checkpoint outputs/checkpoints/stage2_vlm_C3.pt
 ```
-
-### Stage C — projected-token-space diagnostics
-
-Three checkpoints, three runs each through the extract → compute → plot pipeline.
-Naming convention used across scripts:
-
-| Diagram label | Extraction `--checkpoint` | Metrics / plots `--measurement-point` |
-|---|---|---|
-| **random-init** | `random` | `projected_untrained` |
-| **Stage B.1** | `outputs/checkpoints/stage1_projector.pt` | `projected_stage1` |
-| **Stage B.2** | `outputs/checkpoints/stage2_full.pt` | `projected_stage2` |
-
-```bash
-# 1. extract projected-token embeddings — one run per checkpoint
-python scripts/07_extract_projected.py --checkpoint random
-python scripts/07_extract_projected.py --checkpoint outputs/checkpoints/stage1_projector.pt
-python scripts/07_extract_projected.py --checkpoint outputs/checkpoints/stage2_full.pt
-
-# 2. compute gap metrics for each
-python scripts/03_compute_gap.py --measurement-point projected_untrained
-python scripts/03_compute_gap.py --measurement-point projected_stage1
-python scripts/03_compute_gap.py --measurement-point projected_stage2
-
-# 3. plots per checkpoint + a combined trajectory plot
-python scripts/04_make_plots.py --measurement-point projected_untrained
-python scripts/04_make_plots.py --measurement-point projected_stage1
-python scripts/04_make_plots.py --measurement-point projected_stage2
-```
-
-### Stage D — zero-shot captioning eval
-
-```bash
-python scripts/08_run_captioning.py --config configs/captioning.yaml
-python scripts/09_score_captions.py
-```
-
-Outputs: `outputs/predictions/captions_stage2.json`, `outputs/metrics/captioning_scores.json`
 
 ### Tests
 
 ```bash
-pytest tests/ -v                          # full suite
-pytest tests/ -m "not slow and not gpu"  # fast CI subset (no model loading)
+pytest tests/ -v                            # full suite
+pytest tests/ -m "not slow and not gpu"     # fast CI subset (no model loading)
 ```
 
 ---
@@ -393,16 +264,15 @@ pytest tests/ -m "not slow and not gpu"  # fast CI subset (no model loading)
 
 Every script writes alongside its outputs:
 
-- **Config snapshot** — full YAML used (not just the diff from defaults)
-- **Git commit hash** — exact code version
-- **`pip freeze` dump** — full dependency manifest
-- **Random seeds** — numpy, torch, and Python RNG states
-- **Hardware info** — GPU model, CUDA version, driver
-- **Walltime and peak GPU memory**
+- Config snapshot (full YAML used)
+- Git commit hash
+- `pip freeze` dump
+- Random seeds (numpy, torch, Python)
+- Hardware info (GPU model, CUDA version, driver)
+- Walltime and peak GPU memory
 
-All scripts set `torch.backends.cudnn.deterministic = True` and
-`torch.backends.cudnn.benchmark = False`. Single-GPU Float32 runs are bit-exact
-reproducible. Multi-GPU bf16 runs are not — documented explicitly in the thesis.
+`torch.backends.cudnn.deterministic = True` and `benchmark = False` are set globally.
+Single-GPU Float32 runs are bit-exact reproducible; multi-GPU bf16 runs are not.
 
 ---
 
@@ -431,16 +301,34 @@ reproducible. Multi-GPU bf16 runs are not — documented explicitly in the thesi
   year    = {2022}
 }
 
-@article{chen2024llm2clip,
-  title   = {LLM2CLIP: Powerful Language Model Unlocks Richer Visual Representation},
-  author  = {Chen, Weiquan and others},
-  journal = {arXiv preprint arXiv:2411.04997},
-  year    = {2024}
+@inproceedings{radford2021clip,
+  title     = {Learning Transferable Visual Models From Natural Language Supervision},
+  author    = {Radford, Alec and others},
+  booktitle = {ICML},
+  year      = {2021}
+}
+
+@article{touvron2023llama2,
+  title   = {Llama 2: Open Foundation and Fine-Tuned Chat Models},
+  author  = {Touvron, Hugo and others},
+  journal = {arXiv preprint arXiv:2307.09288},
+  year    = {2023}
+}
+
+@inproceedings{liu2023llava,
+  title     = {Visual Instruction Tuning},
+  author    = {Liu, Haotian and others},
+  booktitle = {NeurIPS},
+  year      = {2023}
+}
+
+@misc{vlmevalkit,
+  title  = {VLMEvalKit: An Open-Source Toolkit for Evaluating Large Multi-Modality Models},
+  author = {OpenCompass Contributors},
+  year   = {2024},
+  url    = {https://github.com/open-compass/VLMEvalKit}
 }
 ```
-
-Paper code references: `Yu-xm/ReVision`, `Yu-xm/Modality_Gap_Theory`,
-`Yu-xm/Unicorn`, `Weixin-Liang/Modality-Gap`.
 
 ---
 

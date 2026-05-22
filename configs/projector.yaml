@@ -1,20 +1,22 @@
-# 2-layer MLP projector (LLaVA-style).
-# Maps CLIP vision-tower token features into Llama-3 input embedding space.
+# 2-layer MLP connector (LLaVA-style) — the only component that varies across
+# the C0/C1/C2/C3 experimental conditions.
+#
+# Maps CLIP ViT-L/14 token features (1024-d) into LLaMA-2-7B input embedding
+# space (4096-d).
 
 architecture:
   type: mlp2x_gelu
-  in_dim: 1024     # LLM2CLIP vision-tower hidden dim (per-token)
+  in_dim: 1024     # CLIP ViT-L/14 per-token hidden dim
   hidden_dim: 4096
-  out_dim: 4096    # Llama-3 hidden size
+  out_dim: 4096    # LLaMA-2-7B hidden size
   activation: gelu
 
 initialization:
-  # Standard LLaVA scheme.
   weight_init: kaiming_normal
   bias_init: zeros
 
-# At training time the projector takes the full sequence of 576 visual tokens
-# (post-CLIP) and emits 576 tokens of dim 4096, which are spliced into the LLM
-# input embedding sequence at the position of the <image> placeholder.
+# Stage 2 keeps the full 257-token visual sequence; Stage 1 mean-pools the
+# connector output for the InfoNCE contrastive target. See
+# configs/training_stage1.yaml and src/diagnostics/extract_projected.py.
 sequence:
-  num_visual_tokens: 576
+  num_visual_tokens: 257

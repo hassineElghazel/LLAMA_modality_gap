@@ -189,22 +189,186 @@ def knn_mixing_rate(X, Y, k: int = 20) -> float:
     return float(opposite) / (2 * n * k)
 
 
+# ---------- Overleaf-spec metrics (per-modality + bias decomposition) ----------
+
+def trace_cov(X) -> float:
+    """tr(Sigma_x) — global variance scale (spec §"Trace")."""
+    X = _to_f64(X)
+    return float(np.trace(_covariance(X)))
+
+
+def effective_rank(X) -> float:
+    """tr(Sigma)^2 / tr(Sigma^2) on a single modality's covariance.
+
+    Per spec §"Effective rank — representation compactness". Distinct from
+    ``effective_dimension(X, Y)`` which is evaluated on the residual covariance
+    Sigma_r; this version operates on Sigma_x or Sigma_y in isolation.
+    """
+    X = _to_f64(X)
+    S = _covariance(X)
+    w, _ = _eigh_desc(S)
+    num = float(np.sum(w)) ** 2
+    den = float(np.sum(w * w))
+    if den <= 0:
+        return float("nan")
+    return num / den
+
+
+def cov_condition_number(X, eps: float = 1e-12) -> float:
+    """kappa(Sigma_x) := lambda_max(Sigma_x) / max(lambda_min(Sigma_x), eps).
+
+    Per spec §"Residual anisotropy". Large kappa indicates a needle-like
+    covariance; isotropic baseline ~ 1.
+    """
+    X = _to_f64(X)
+    w, _ = _eigh_desc(_covariance(X))
+    w_max = float(w[0])
+    w_min = float(w[-1])
+    return w_max / max(w_min, eps)
+
+
+def power_law_exponent(
+    X,
+    fit_start: int = 1,
+    fit_end: int | None = None,
+    eps: float = 1e-12,
+) -> float:
+    """alpha such that lambda_i ~ i^{-alpha} for sorted eigenvalues of Sigma_x.
+
+    Per spec §"Power-law exponent — semantic hierarchy preservation". Fits a
+    line through ``log(rank)`` vs ``log(eigenvalue)`` over the rank range
+    [fit_start, fit_end]. By default uses ranks 1..d/2 to avoid the noisy tail.
+    Returns the positive exponent ``alpha = -slope``.
+    """
+    X = _to_f64(X)
+    w, _ = _eigh_desc(_covariance(X))
+    d = len(w)
+    if fit_end is None:
+        fit_end = max(2, d // 2)
+    fit_start = max(1, fit_start)
+    fit_end = min(d, fit_end)
+    if fit_end <= fit_start:
+        return float("nan")
+    ranks = np.arange(fit_start, fit_end + 1, dtype=np.float64)
+    eigs = w[fit_start - 1 : fit_end]
+    log_ranks = np.log(ranks)
+    log_eigs = np.log(np.clip(eigs, eps, None))
+    slope, _ = np.polyfit(log_ranks, log_eigs, 1)
+    return float(-slope)
+
+
+def pmb_cob_decomposition(X, Y) -> dict[str, float]:
+    """Decompose the paired bias `b_i = x_i - y_i` into:
+
+    - **COB** (Centroid Of Bias): `gamma = mean(b_i) = mu_x - mu_y`. Its norm
+      `||gamma||` equals the centroid gap `G_mu`.
+    - **PMB** (Per-pair Mean Bias magnitude): `||beta|| = sqrt(mean(||b_i||^2))`,
+      the root-mean-square per-pair bias magnitude.
+
+    The two satisfy `||beta||^2 = ||gamma||^2 + (1/n) sum_i ||b_i - gamma||^2`,
+    so `||beta||^2 - ||gamma||^2` is the per-pair residual energy that the
+    centroid offset does NOT explain.
+
+    Returns ``{"beta_norm": ..., "gamma_norm": ..., "residual_energy": ...}``.
+    """
+    X = _to_f64(X); Y = _to_f64(Y)
+    _check_paired(X, Y)
+    B = X - Y                              # (n, d) per-pair bias vectors
+    gamma = B.mean(axis=0)
+    gamma_norm = float(np.linalg.norm(gamma))
+    beta_norm_sq = float(np.mean(np.sum(B * B, axis=1)))
+    beta_norm = float(np.sqrt(beta_norm_sq))
+    residual_energy = float(beta_norm_sq - gamma_norm * gamma_norm)
+    return {
+        "beta_norm": beta_norm,
+        "gamma_norm": gamma_norm,
+        "residual_energy": max(residual_energy, 0.0),   # numerical guard
+    }
+
+
+def js_divergence_angular(
+    X,
+    Y,
+    n_bins: int = 50,
+    n_sample_pairs: int = 20000,
+    seed: int = 0,
+    eps: float = 1e-12,
+) -> float:
+    """Jensen-Shannon divergence between within-modality pairwise angle
+    distributions of X and Y.
+
+    Per spec §"JS divergence — angular topology mismatch". Each modality is
+    mean-centered, then ``n_sample_pairs`` random index pairs (i != j) are
+    sampled to estimate the distribution of pairwise angles
+    ``theta_ij = arccos(cos_sim(x_i, x_j))`` on the support ``[0, pi]``.
+    Histograms with ``n_bins`` uniform bins are compared via the
+    symmetric JS divergence (in nats; range ``[0, ln 2]``).
+    """
+    rng = np.random.default_rng(seed)
+    X = _to_f64(X); Y = _to_f64(Y)
+    n, _ = _check_paired(X, Y)
+
+    def _angle_hist(Z: np.ndarray) -> np.ndarray:
+        Z = Z - Z.mean(axis=0, keepdims=True)
+        norms = np.linalg.norm(Z, axis=1)
+        norms = np.maximum(norms, eps)
+        Zn = Z / norms[:, None]
+        idx_i = rng.integers(0, n, size=n_sample_pairs)
+        idx_j = rng.integers(0, n, size=n_sample_pairs)
+        same = idx_i == idx_j
+        if same.any():
+            idx_j[same] = (idx_j[same] + 1) % n
+        dots = np.einsum("nd,nd->n", Zn[idx_i], Zn[idx_j])
+        dots = np.clip(dots, -1.0 + eps, 1.0 - eps)
+        angles = np.arccos(dots)
+        h, _ = np.histogram(angles, bins=n_bins, range=(0.0, np.pi), density=False)
+        p = h.astype(np.float64) + eps
+        return p / p.sum()
+
+    P = _angle_hist(X)
+    Q = _angle_hist(Y)
+    M = 0.5 * (P + Q)
+    kl_pm = float(np.sum(P * np.log(P / M)))
+    kl_qm = float(np.sum(Q * np.log(Q / M)))
+    return 0.5 * (kl_pm + kl_qm)
+
+
 # ---------- summary container ----------
 
 @dataclass
 class GapMetrics:
-    """All scalar diagnostic metrics for one paired embedding set."""
+    """All scalar diagnostic metrics for one paired embedding set.
+
+    Spec metrics (Overleaf §"Metrics → Geometric Metrics") are stored as
+    top-level fields. Legacy metrics from earlier paper-aligned analyses
+    (G_Sigma, C_lambda, A_r, residual_ratio, subspace_overlap) remain on the
+    dataclass so existing analyses do not break.
+    """
 
     n: int
     d: int
-    G_mu: float
+    # ---- Overleaf spec metrics ----
+    G_mu: float                    # centroid distance (= ||gamma||)
+    alpha_image: float             # power-law exponent of Sigma_x
+    alpha_text: float              # power-law exponent of Sigma_y
+    js_divergence_angular: float
+    knn_mixing_rate_k20: float
+    beta_norm: float               # PMB magnitude
+    gamma_norm: float              # COB magnitude (= G_mu)
+    pair_residual_energy: float
+    kappa_image: float             # kappa(Sigma_x)
+    kappa_text: float              # kappa(Sigma_y)
+    eff_rank_image: float
+    eff_rank_text: float
+    trace_image: float
+    trace_text: float
+    # ---- Legacy / supplementary ----
     G_Sigma: float
     C_lambda: float
     A_r: float
-    d_eff: float
+    d_eff: float                   # effective dim of Sigma_r (residual)
     d_eff_over_d: float
     residual_ratio: float
-    knn_mixing_rate_k20: float
     subspace_overlap_q: dict[int, float]
     subspace_overlap_random_baseline_q: dict[int, float]
 
@@ -212,17 +376,33 @@ class GapMetrics:
         return {
             "n": self.n,
             "d": self.d,
-            "G_mu": self.G_mu,
-            "G_Sigma": self.G_Sigma,
-            "C_lambda": self.C_lambda,
-            "A_r": self.A_r,
-            "d_eff": self.d_eff,
-            "d_eff_over_d": self.d_eff_over_d,
-            "residual_ratio": self.residual_ratio,
-            "knn_mixing_rate_k20": self.knn_mixing_rate_k20,
-            "subspace_overlap_q": {str(k): v for k, v in self.subspace_overlap_q.items()},
-            "subspace_overlap_random_baseline_q": {
-                str(k): v for k, v in self.subspace_overlap_random_baseline_q.items()
+            "spec_metrics": {
+                "G_mu": self.G_mu,
+                "alpha_image": self.alpha_image,
+                "alpha_text": self.alpha_text,
+                "js_divergence_angular": self.js_divergence_angular,
+                "knn_mixing_rate_k20": self.knn_mixing_rate_k20,
+                "beta_norm": self.beta_norm,
+                "gamma_norm": self.gamma_norm,
+                "pair_residual_energy": self.pair_residual_energy,
+                "kappa_image": self.kappa_image,
+                "kappa_text": self.kappa_text,
+                "eff_rank_image": self.eff_rank_image,
+                "eff_rank_text": self.eff_rank_text,
+                "trace_image": self.trace_image,
+                "trace_text": self.trace_text,
+            },
+            "extras": {
+                "G_Sigma": self.G_Sigma,
+                "C_lambda": self.C_lambda,
+                "A_r": self.A_r,
+                "d_eff": self.d_eff,
+                "d_eff_over_d": self.d_eff_over_d,
+                "residual_ratio": self.residual_ratio,
+                "subspace_overlap_q": {str(k): v for k, v in self.subspace_overlap_q.items()},
+                "subspace_overlap_random_baseline_q": {
+                    str(k): v for k, v in self.subspace_overlap_random_baseline_q.items()
+                },
             },
         }
 
@@ -235,11 +415,15 @@ def compute_all_metrics(
     Y,
     q_ladder: tuple[int, ...] = DEFAULT_Q_LADDER,
     knn_k: int = 20,
+    js_n_bins: int = 50,
+    js_n_sample_pairs: int = 20000,
+    js_seed: int = 0,
+    power_law_fit_end: int | None = None,
 ) -> GapMetrics:
-    """Run every metric and pack into a ``GapMetrics`` container.
+    """Run every spec metric (+ legacy extras) and pack into ``GapMetrics``.
 
-    Subspace-overlap q values that exceed d are silently skipped (so the same
-    default ladder works for d=768 and d=4096).
+    Subspace-overlap q values that exceed d are silently skipped, so the same
+    ladder works at any ambient dimension.
     """
     X = _to_f64(X); Y = _to_f64(Y)
     n, d = _check_paired(X, Y)
@@ -247,17 +431,34 @@ def compute_all_metrics(
     overlaps = {q: subspace_overlap(X, Y, q) for q in qs}
     baselines = {q: q / d for q in qs}
     deff = effective_dimension(X, Y)
+    pmb = pmb_cob_decomposition(X, Y)
     return GapMetrics(
         n=n,
         d=d,
+        # spec metrics
         G_mu=centroid_gap(X, Y),
+        alpha_image=power_law_exponent(X, fit_end=power_law_fit_end),
+        alpha_text=power_law_exponent(Y, fit_end=power_law_fit_end),
+        js_divergence_angular=js_divergence_angular(
+            X, Y, n_bins=js_n_bins, n_sample_pairs=js_n_sample_pairs, seed=js_seed
+        ),
+        knn_mixing_rate_k20=knn_mixing_rate(X, Y, k=knn_k),
+        beta_norm=pmb["beta_norm"],
+        gamma_norm=pmb["gamma_norm"],
+        pair_residual_energy=pmb["residual_energy"],
+        kappa_image=cov_condition_number(X),
+        kappa_text=cov_condition_number(Y),
+        eff_rank_image=effective_rank(X),
+        eff_rank_text=effective_rank(Y),
+        trace_image=trace_cov(X),
+        trace_text=trace_cov(Y),
+        # legacy
         G_Sigma=covariance_shape_discrepancy(X, Y),
         C_lambda=spectral_correlation(X, Y),
         A_r=anisotropy_ratio(X, Y),
         d_eff=deff,
         d_eff_over_d=(deff / d) if not np.isnan(deff) else float("nan"),
         residual_ratio=residual_ratio(X, Y),
-        knn_mixing_rate_k20=knn_mixing_rate(X, Y, k=knn_k),
         subspace_overlap_q=overlaps,
         subspace_overlap_random_baseline_q=baselines,
     )

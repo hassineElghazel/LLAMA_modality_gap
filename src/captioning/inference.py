@@ -12,20 +12,16 @@ from typing import Iterable
 import torch
 from tqdm import tqdm
 
-from ..data.coco_loader import CocoCaptionItem, load_image
+from ..data.coco_val2017_loader import CocoCaptionItem, load_image
 from ..models.vlm import VLM
 
 
 def _format_prompt(template: str, image_token: str = "<image>") -> str:
-    """Apply a Llama-3-Instruct chat-style wrapper around the user prompt."""
-    user = template.strip()
-    return (
-        "<|begin_of_text|>"
-        "<|start_header_id|>user<|end_header_id|>\n\n"
-        f"{user}"
-        "<|eot_id|>"
-        "<|start_header_id|>assistant<|end_header_id|>\n\n"
-    )
+    """LLaMA-2 base does not use an Instruct chat template; return the prompt
+    verbatim. The connector replaces ``<image>`` at splice time
+    (see ``VLM._build_input_embeddings``).
+    """
+    return template.strip()
 
 
 @torch.no_grad()

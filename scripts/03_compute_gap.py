@@ -1,11 +1,10 @@
-"""Compute modality-gap diagnostic metrics from saved embeddings.
+"""Compute the spec-defined gap metrics for one of the 5 measurement points.
 
-Works for any measurement point (encoder / projected_untrained /
-projected_stage1 / projected_stage2). The --measurement-point flag picks
-which embedding files to load.
+Per Overleaf Table 3 the conditions are: C0_random, C1_stage2, C2_stage1,
+C3_stage1, C3_stage2. The script loads the saved 4096-d image/text embeddings
+for the chosen condition and runs ``compute_all_metrics``.
 
-Outputs:
-  outputs/metrics/gap_<point>.json
+Outputs: ``outputs/metrics/gap_<condition>.json``.
 """
 from __future__ import annotations
 
@@ -18,31 +17,36 @@ from src.diagnostics.metrics import compute_all_metrics
 from src.utils.io import save_json
 
 
-_FILE_TAGS = {
-    "encoder": ("encoder_image_embeds.pt", "encoder_text_embeds.pt"),
-    "projected_untrained": ("projected_untrained_image_pooled.pt", "projected_untrained_text_pooled.pt"),
-    "projected_stage1": ("projected_stage1_image_pooled.pt", "projected_stage1_text_pooled.pt"),
-    "projected_stage2": ("projected_stage2_image_pooled.pt", "projected_stage2_text_pooled.pt"),
-}
+CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2")
+
+
+def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:
+    img = embeddings_dir / f"projected_{condition}_image_pooled.pt"
+    txt = embeddings_dir / f"projected_{condition}_text_pooled.pt"
+    return img, txt
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--measurement-point", required=True, choices=sorted(_FILE_TAGS))
+    p.add_argument("--condition", required=True, choices=CONDITIONS)
     p.add_argument("--embeddings-dir", default="outputs/embeddings")
     p.add_argument("--out-dir", default="outputs/metrics")
     args = p.parse_args()
 
-    img_name, txt_name = _FILE_TAGS[args.measurement_point]
-    edir = Path(args.embeddings_dir)
-    X = torch.load(edir / img_name)
-    Y = torch.load(edir / txt_name)
+    img_path, txt_path = _embed_paths(args.condition, Path(args.embeddings_dir))
+    X = torch.load(img_path)
+    Y = torch.load(txt_path)
     metrics = compute_all_metrics(X, Y)
 
-    out_path = Path(args.out_dir) / f"gap_{args.measurement_point}.json"
+    out_path = Path(args.out_dir) / f"gap_{args.condition}.json"
     save_json(metrics.to_dict(), out_path)
-    print(f"[ok] {args.measurement_point}: G_mu={metrics.G_mu:.4f}  A_r={metrics.A_r:.2f}  "
-          f"d_eff/d={metrics.d_eff_over_d:.3f}  knn_mix={metrics.knn_mixing_rate_k20:.4f}")
+    spec = metrics.to_dict()["spec_metrics"]
+    print(
+        f"[ok] {args.condition}: "
+        f"G_mu={spec['G_mu']:.4f}  alpha_img={spec['alpha_image']:.2f}  "
+        f"JS={spec['js_divergence_angular']:.4f}  "
+        f"knn={spec['knn_mixing_rate_k20']:.4f}"
+    )
     print(f"[ok] wrote {out_path}")
 
 

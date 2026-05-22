@@ -1,13 +1,13 @@
-# Zero-shot captioning evaluation on COCO Karpathy test 5K.
+# Zero-shot / fine-tuned captioning evaluation on COCO val2017 (5K images).
 
 eval_set:
-  name: coco_karpathy_test
+  name: coco_val2017
   num_images: 5000
-  karpathy_split_json: data/karpathy/dataset_coco.json
-  image_root: data/coco
+  annotations_json: data/coco/annotations/captions_val2017.json
+  image_root: data/coco/val2017
 
 prompt:
-  system: ""   # Llama-3-Instruct format applied at runtime
+  system: ""
   user: |
     <image>
     Provide a brief, one-sentence description of this image.
@@ -20,13 +20,15 @@ generation:
 batch:
   per_device_batch_size: 8
 
+# Per-condition checkpoint resolution is handled by scripts/run_condition.py;
+# this default targets the C3 full-pipeline output.
 checkpoint:
-  vlm_checkpoint: outputs/checkpoints/stage2_full.pt
+  vlm_checkpoint: outputs/checkpoints/stage2_vlm.pt
 
 output:
-  predictions_path: outputs/predictions/zero_shot_captions.json
-  scores_path: outputs/metrics/captioning_scores.json
-  qualitative_report: outputs/reports/qualitative_examples.md
+  predictions_dir: outputs/predictions
+  scores_dir: outputs/metrics
+  qualitative_report_dir: outputs/reports
   num_qualitative_samples: 20
 
 seed: 42

@@ -13,13 +13,13 @@ from typing import Optional
 import torch
 from torch import nn
 
-from ..encoders.base import Encoder
+from ..encoders.base import VisionEncoder
 from .projector import MLP2xGELU
 
 
 @dataclass
 class VLMConfig:
-    llm_hf_id: str = "meta-llama/Meta-Llama-3-8B-Instruct"
+    llm_hf_id: str = "meta-llama/Llama-2-7b-hf"
     image_token: str = "<image>"
     weights_dtype: str = "bfloat16"
     device: str = "cuda"
@@ -36,7 +36,7 @@ class VLM(nn.Module):
 
     def __init__(
         self,
-        encoder: Encoder,
+        encoder: VisionEncoder,
         projector: MLP2xGELU,
         cfg: Optional[VLMConfig] = None,
     ):
@@ -69,28 +69,34 @@ class VLM(nn.Module):
 
     # ---------- core splice ----------
 
-    def _build_input_embeddings(
-        self, images, input_ids: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Replace each <image> token in input_ids with the projected visual
-        token sequence. Returns (inputs_embeds, attention_mask).
+    def _build_inputs(
+        self,
+        images,
+        input_ids: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """Replace each <image> token with the projected visual sequence.
 
-        Constraint: every row of input_ids must contain exactly one image
-        placeholder. (Multi-image not supported in this phase.)
+        Returns ``(inputs_embeds, attention_mask, expanded_labels)``. When
+        ``labels`` is provided, the visual-token positions are masked with -100
+        so AR cross-entropy is computed on text positions only (Overleaf §4.2).
+
+        Constraint: every row of input_ids contains exactly one image
+        placeholder. Multi-image not supported in this phase.
         """
         assert self._llm is not None, "call .load_llm() first"
         assert self._image_token_id is not None
         embed_layer = self._llm.get_input_embeddings()
 
-        # Visual tokens: (B, num_visual_tokens, hidden_llm)
         with torch.no_grad():
             vis_tokens = self.encoder.encode_image_tokens(images)
         proj_tokens = self.projector(vis_tokens.to(next(self.projector.parameters()).dtype))
+        n_vis = proj_tokens.shape[1]
 
-        B, L = input_ids.shape
+        B, _ = input_ids.shape
         text_embeds = embed_layer(input_ids)
 
-        new_rows, new_masks = [], []
+        new_rows, new_masks, new_labels = [], [], [] if labels is not None else None
         for b in range(B):
             ids = input_ids[b]
             pos = (ids == self._image_token_id).nonzero(as_tuple=True)[0]
@@ -100,19 +106,33 @@ class VLM(nn.Module):
                 )
             i = int(pos.item())
             row = torch.cat([text_embeds[b, :i], proj_tokens[b], text_embeds[b, i + 1 :]], dim=0)
-            mask = torch.ones(row.shape[0], dtype=torch.long, device=row.device)
             new_rows.append(row)
-            new_masks.append(mask)
+            new_masks.append(torch.ones(row.shape[0], dtype=torch.long, device=row.device))
+            if labels is not None:
+                lab = labels[b]
+                ignore = torch.full((n_vis,), -100, dtype=lab.dtype, device=lab.device)
+                new_labels.append(torch.cat([lab[:i], ignore, lab[i + 1 :]], dim=0))
 
-        # Right-pad rows to common length.
         max_len = max(r.shape[0] for r in new_rows)
         hidden = new_rows[0].shape[-1]
         padded = torch.zeros(B, max_len, hidden, dtype=new_rows[0].dtype, device=new_rows[0].device)
         att = torch.zeros(B, max_len, dtype=torch.long, device=new_rows[0].device)
+        out_labels = None
+        if labels is not None:
+            out_labels = torch.full((B, max_len), -100, dtype=labels.dtype, device=labels.device)
         for b, (r, m) in enumerate(zip(new_rows, new_masks)):
             padded[b, : r.shape[0]] = r
             att[b, : m.shape[0]] = m
-        return padded, att
+            if labels is not None:
+                out_labels[b, : new_labels[b].shape[0]] = new_labels[b]
+        return padded, att, out_labels
+
+    def _build_input_embeddings(
+        self, images, input_ids: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Backward-compatible alias: returns (inputs_embeds, attention_mask)."""
+        e, m, _ = self._build_inputs(images, input_ids, labels=None)
+        return e, m
 
     # ---------- forward / generate ----------
 
@@ -122,8 +142,12 @@ class VLM(nn.Module):
         input_ids: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
     ):
-        inputs_embeds, attention_mask = self._build_input_embeddings(images, input_ids)
-        return self._llm(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
+        inputs_embeds, attention_mask, exp_labels = self._build_inputs(images, input_ids, labels)
+        return self._llm(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            labels=exp_labels,
+        )
 
     @torch.no_grad()
     def generate(self, images, prompt: str, **gen_kwargs) -> list[str]:

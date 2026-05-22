@@ -1,19 +1,25 @@
-"""Projected-token-space embedding extraction.
+"""Connector-output (4096-d) embedding extraction for the gap measurements.
 
-The conceptual extension described in §2 of the plan: measure the gap at the
-LLM input layer, not just in the encoder's contrastive space.
+Per Overleaf spec §6.1, both modalities are mean-pooled in LLaMA-2's 4096-d
+input space:
 
-For each pair in the diagnostic manifest:
-- Run the image through CLIP vision tower -> 576 tokens x 1024.
-- Apply trained projector -> 576 tokens x 4096.
-- Pool to a single 4096 vector. Default: mean across tokens.
-- Save the raw 576-token tensor too, so alternative pooling can be tried later
-  without re-extraction (mean-pool of 576 vs ~5-30 caption tokens is noisy).
+    z_img = mean-pool( Connector( ViT(image) ) )   in R^4096
+    z_txt = mean-pool( LLaMA_embed( tokenize(caption) ) )   in R^4096
+
+For each (image, caption) pair in the diagnostic manifest:
+- Run the image through CLIP ViT-L/14 -> 257 tokens x 1024.
+- Apply the connector -> 257 tokens x 4096.
+- Mean-pool across tokens -> 4096-d row.
+- The raw 257-token tensor is saved alongside so alternative pooling can be
+  tried later without re-extraction.
 
 Text side:
-- Tokenize with Llama-3 tokenizer.
+- Tokenize with the LLaMA-2 tokenizer.
 - Look up via ``llm.get_input_embeddings()`` -> L tokens x 4096.
-- Pool: mean across CONTENT tokens (excluding BOS/EOS/pad).
+- Mean-pool across CONTENT tokens (excluding BOS/EOS/pad).
+
+Embeddings are cast to Float64 before saving (ReAlign Appendix E.2 — Float32
+introduces a ~1e-8 error floor that contaminates centroid metrics).
 """
 from __future__ import annotations
 
@@ -23,8 +29,8 @@ from typing import Iterable
 import torch
 from tqdm import tqdm
 
-from ..data.coco_loader import CocoPair, load_image
-from ..encoders.base import Encoder
+from ..data.coco_val2017_loader import CocoPair, load_image
+from ..encoders.base import VisionEncoder
 from ..models.projector import MLP2xGELU
 
 
@@ -35,7 +41,7 @@ def _batched(seq, n):
 
 @torch.no_grad()
 def extract_projected_embeddings(
-    encoder: Encoder,
+    encoder: VisionEncoder,
     projector: MLP2xGELU,
     llm,
     tokenizer,
@@ -56,8 +62,8 @@ def extract_projected_embeddings(
         captions = [p.caption for p in batch]
 
         # ---------- visual side ----------
-        vis_tokens = encoder.encode_image_tokens(images).to(device)        # (B, 576, 1024)
-        proj_tokens = projector(vis_tokens.to(next(projector.parameters()).dtype))  # (B, 576, 4096)
+        vis_tokens = encoder.encode_image_tokens(images).to(device)        # (B, 257, 1024)
+        proj_tokens = projector(vis_tokens.to(next(projector.parameters()).dtype))  # (B, 257, 4096)
         img_pooled.append(proj_tokens.mean(dim=1).to(torch.float64).cpu())
         if save_raw_tokens:
             img_token_tensors.append(proj_tokens.to(torch.float32).cpu())
