@@ -1,200 +1,266 @@
 # Measuring the Modality Gap in MLLMs — Connector Ablation Study
 
-> Master thesis project — Data Science & Engineering, a.y. 2025–2026
-
-A four-condition ablation study isolating where the **modality gap** is opened or closed
-in a CLIP-ViT → MLP-connector → LLaMA-2 multimodal LLM. The gap is measured at the
-**connector output** (4096-dim LLM input-embedding space) — the only point in the
-forward pass where image tokens and text tokens are commensurate.
+> Master thesis project · Data Science & Engineering, a.y. 2025–2026
 
 ---
 
-## Research question
+## Objective
 
-The papers that characterize the modality gap (Liang 2022; ReAlign; AnisoAlign) measure
-it in CLIP-style contrastive spaces. Inside an MLLM, image and text only meet **after**
-the connector has projected vision features into the LLM's input space. The thesis asks:
-
-> Which training stage — contrastive Stage-1 pretraining of the connector, or
-> instruction-tuning Stage-2 — actually closes the gap at the LLM-input boundary?
-> And does either stage trade gap-closure against downstream task quality?
-
-The 4-condition design factorizes Stage-1 and Stage-2 to attribute each effect.
-
-| Condition | Stage 1 (InfoNCE pretrain) | Stage 2 (LoRA SFT) | Measured at | Downstream eval |
-|---|---|---|---|---|
-| **C0** | — (random connector) | — | random connector | none (no trained LLM) |
-| **C1** | — | LLaVA-Instruct-150K | post-Stage-2 connector | captioning + VLMEvalKit |
-| **C2** | Bunny-v1.1 InfoNCE | — | post-Stage-1 connector | captioning + VLMEvalKit |
-| **C3** | Bunny-v1.1 InfoNCE | LLaVA-Instruct-150K | post-Stage-1 **and** post-Stage-2 | captioning + VLMEvalKit |
-
-C3 contributes **two** measurements (post-Stage-1 and post-Stage-2) so the Stage-2
-contribution can be isolated within the same training trajectory.
+Measure how the connector's training regime affects the modality gap in a Multimodal Large Language Model.
+Through four experimental conditions, we isolate the contributions of contrastive pre-training (Stage 1)
+and autoregressive refinement (Stage 2) to the evolution of the modality gap. All measurements are taken
+in the LLM's 4096-dim input space.
 
 ---
 
 ## Architecture
 
-| Component | Choice |
-|---|---|
-| Vision encoder | `openai/clip-vit-large-patch14` @ 224² · frozen |
-| Visual tokens | 257 × 1024 (CLS + 16×16 patches) |
-| Connector | 2-layer MLP + GELU; `1024 → 4096 → 4096` (~17 M params) |
-| LLM | `meta-llama/Llama-2-7b-hf` · frozen weights, LoRA-tunable in Stage 2 |
-| Stage 1 loss | Symmetric InfoNCE with learnable temperature τ (init `1/0.07`) |
-| Stage 1 image side | `mean_pool(connector(ViT(image)))` → ℝ⁴⁰⁹⁶ |
-| Stage 1 text side | `mean_pool(llama_embed(tokenize(caption)))` → ℝ⁴⁰⁹⁶ |
-| Stage 2 loss | AR cross-entropy on text positions only (visual tokens masked) |
-| Stage 2 adaptation | LoRA r=16, α=32, dropout 0.05 on `{q,k,v,o,gate,up,down}_proj` |
-| Stage 1 data | `BoyaWu10/Bunny-v1.1-data` (~2 M image-caption pairs) |
-| Stage 2 data | `liuhaotian/LLaVA-Instruct-150K` |
-| Diagnostic + eval set | COCO val2017 (5 K images, 5 reference captions each) |
+The pipeline is fixed across all conditions. A single connector maps CLIP visual features into LLaMA's input space.
 
-### Inference pipeline
-
-```mermaid
-flowchart LR
-    IMG([Image]) --> VT["CLIP ViT-L/14 @ 224²<br/>frozen"]
-    VT -->|"257 × 1024"| PROJ["MLP Connector<br/>1024 → 4096 → 4096"]
-    PROJ -->|"257 × 4096"| SPL["Splice at &lt;image&gt; token"]
-    PRMT([Text prompt]) -->|"tokenize → embed"| SPL
-    SPL --> LLM["LLaMA-2-7B + LoRA"]
-    LLM --> OUT([Caption / answer])
+```
+ ┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+ │    Image     │────▶│  CLIP ViT-L/14   │────▶│   Connector      │────▶│  LLaMA-2-7B      │
+ │   224×224    │     │    [FROZEN]       │     │      MLP         │     │   + LoRA         │
+ └──────────────┘     │     → 1024       │     │  1024 → 4096     │     │    4096          │
+                      └──────────────────┘     └────────┬─────────┘     └──────────────────┘
+                                                         │
+                                                ╔════════╧════════╗
+                                                ║  Measurement Pt ║
+                                                ║   4096-dim      ║
+                                                ╚═════════════════╝
 ```
 
-### Gap measurement (connector output)
+**Figure 1:** Full pipeline. The connector is the only component that varies across conditions.
+The modality gap is measured at the connector output.
 
-For each (image, caption) pair in the COCO val2017 diagnostic sample we form one row of
-`X` (image side) and one row of `Y` (text side) in ℝ⁴⁰⁹⁶:
-
-```mermaid
-flowchart LR
-    IMG([Image i]) --> VT["CLIP ViT-L/14"]
-    VT --> PROJ["MLP Connector"]
-    PROJ --> POOL1["mean-pool / CLS-pool<br/>over 257 tokens"]
-    POOL1 --> XI["X[i] ∈ ℝ⁴⁰⁹⁶"]
-
-    CAP([Caption i]) --> TOK["LLaMA-2 tokenizer"]
-    TOK --> EMB["LLaMA-2 embed_tokens"]
-    EMB --> POOL2["mean-pool over caption tokens"]
-    POOL2 --> YI["Y[i] ∈ ℝ⁴⁰⁹⁶"]
-
-    XI -.->|"stack 5 K rows"| METRICS[["Spec metrics<br/>computed on (X, Y)"]]
-    YI -.-> METRICS
-```
-
-All eigendecompositions and inner products are performed in **Float64** on CPU via
-`scipy.linalg.eigh`. The Float64 boundary is enforced at the entry of every metric
-function (`_to_f64`).
+| Component | Architecture | Dimension | Role |
+|:---|:---|:---|:---|
+| CLIP ViT-L/14 | Vision transformer | → 1024 | Frozen vision encoder |
+| Connector | 2-layer MLP + GELU | 1024 → 4096 | Maps visual features to LLM space |
+| LLaMA-2-7B | Causal LM + LoRA | 4096 | Text generation |
 
 ---
 
-## Diagnostic metrics
+## Stage 1: Contrastive Connector Pre-training
 
-Implemented in `src/diagnostics/metrics.py`. The spec's canonical metric set:
+Stage 1 is a standalone preparation step. It trains the connector with contrastive loss so that it does
+not start with random weights in Stage 2. The alignment happens in LLaMA's 4096-dim space.
 
-| Symbol | Name | Formula sketch |
-|---|---|---|
-| `G_mu` | Centroid gap | `‖μ_x − μ_y‖₂` |
-| `alpha` | Power-law exponent | log-log slope of sorted eigenvalues of Σ_x (and Σ_y) |
-| `JS_angular` | Angular JS divergence | Jensen-Shannon between pairwise-cosine-angle histograms of the two modalities |
-| `kNN_mix` | kNN mixing rate | fraction of k=20 neighbours from the *other* modality |
-| `||β||` | Pair-mean bias | `‖(1/n) Σᵢ (xᵢ − yᵢ)‖₂` |
-| `||γ||` | Centroid-of-bias residual | per-pair bias energy beyond the global centroid offset |
-| `κ(Σ_U)` | Image covariance condition number | `λ_max(Σ_x) / λ_min(Σ_x)` (clamped) |
-| `κ(Σ_V)` | Text covariance condition number | `λ_max(Σ_y) / λ_min(Σ_y)` |
-| `eff_rank_x`, `eff_rank_y` | Effective rank | `tr(Σ)² / tr(Σ²)` for each modality |
-| `tr(Σ_x)`, `tr(Σ_y)` | Trace | total variance per modality |
+```
+ ┌────────┐   ┌──────────────────┐   ┌──────────────────────┐
+ │ Image  │──▶│ CLIP ViT-L/14   │──▶│  Connector           │──▶  z_img
+ └────────┘   │   [FROZEN]      │   │  1024 → 4096         │
+              └──────────────────┘   │  [TRAINED]           │
+                                     └──────────┬───────────┘
+                                                │
+                                       ╔════════╧═════════╗          z_img ──┐
+                                       ║  Measure gap     ║                  ├──▶  InfoNCE Loss
+                                       ║  after training  ║          z_txt ──┘
+                                       ╚══════════════════╝
+ ┌──────────┐   ┌─────────────────┐   ┌──────────────────────┐
+ │ Caption  │──▶│ LLaMA Tokenizer │──▶│  LLaMA Embed         │──▶  z_txt
+ └──────────┘   └─────────────────┘   │  [FROZEN] → 4096     │
+                                      └──────────────────────┘
+```
 
-`GapMetrics` (a dataclass) serializes the canonical set to JSON; legacy metrics
-(`G_Sigma`, `A_r`, `O_q`, …) are preserved in an `extras` field for cross-checks.
+**Figure 2:** Stage 1 — contrastive alignment in LLaMA's 4096-dim space.
 
-The trajectory plot `plot_gap_decomposition` overlays `‖β‖, ‖γ‖, κ(Σ_U), κ(Σ_V)`
-across the five measurement points (C0 → C1 → C2 → C3-stage1 → C3-stage2).
+### Training Setup
+
+| Component | Status |
+|:---|:---|
+| CLIP ViT-L/14 | Frozen |
+| Connector (1024 → 4096) | **Trained** |
+| LLaMA Embed Layer | Frozen (text-side target only) |
+| LLaMA (rest of model) | Not involved |
+
+### Forward Pass
+
+- **Image side:** image → Frozen ViT → CLS token (1024) → Connector → **z_img** (4096)
+- **Text side:** caption → LLaMA tokenizer → LLaMA embed layer (frozen) → mean pool → **z_txt** (4096)
+
+### Loss Function
+
+Symmetric InfoNCE loss over a batch of $N$ image-caption pairs:
+
+$$\mathcal{L} = \frac{1}{2}\left[\mathrm{CE}\!\left(\frac{\mathbf{z}_{\mathrm{img}} \cdot \mathbf{z}_{\mathrm{txt}}^\top}{\tau},\,\mathbf{y}\right) + \mathrm{CE}\!\left(\frac{\mathbf{z}_{\mathrm{txt}} \cdot \mathbf{z}_{\mathrm{img}}^\top}{\tau},\,\mathbf{y}\right)\right]$$
+
+where $\tau$ is a learnable temperature (initialised at $0.07$) and $\mathbf{y} = [0, 1, \ldots, N{-}1]$.
+
+### Data
+
+`BoyaWu10/Bunny-v1.1-data`
+
+### Output
+
+Saved connector checkpoint.
 
 ---
 
-## Downstream evaluation
+## Stage 2: Autoregressive Image Captioning
 
-**Captioning quality** (COCO val2017, pycocoevalcap):
-CIDEr (primary), BLEU-4, METEOR, SPICE.
+Stage 2 refines the connector and trains the LLM to generate text conditioned on visual tokens.
 
-**VLMEvalKit benchmarks** (`src/evaluation/vlmevalkit_adapter.py`):
+```
+ ┌────────┐   ┌────────────────┐   ┌────────────────────────┐
+ │ Image  │──▶│  ViT [FROZEN]  │──▶│  Connector [REFINED]   │──▶ 257 × 4096 ──┐
+ └────────┘   └────────────────┘   │  1024 → 4096           │                  │
+                                   └──────────┬─────────────┘                  ├──▶ [LLaMA-2-7B + LoRA] ──▶ Caption
+                                              │                                  │        [TRAINED]
+                                     ╔════════╧═════════╗    Caption tokens ───┘
+                                     ║  Measure gap     ║    (tokenize + embed)
+                                     ║  after training  ║
+                                     ╚══════════════════╝
+```
 
-| Group | Benchmarks |
-|---|---|
-| General perception | MME · MMStar · ScienceQA_VAL (image) · RealWorldQA |
-| Complex reasoning | MMMU_DEV_VAL · MMMU_Pro · VisuLogic · LogicVista |
-| Hallucination | CRPE · POPE · HallusionBench |
+**Figure 3:** Stage 2 — autoregressive captioning. The connector is refined, not frozen.
 
-C0 has no trained LLM and is skipped for downstream eval; C1/C2/C3 all run the full
-suite.
+### Training Setup
+
+| Component | Status |
+|:---|:---|
+| CLIP ViT-L/14 | Frozen |
+| Connector (1024 → 4096) | **Refined** (loaded from Stage 1 or random) |
+| LLaMA-2-7B + LoRA | **Trained** |
+
+### Forward Pass
+
+**Image side:**
+
+$$\text{image} \;\to\; \text{Frozen ViT} \;\to\; 257 \times 1024 \;\to\; \text{Connector (refined)} \;\to\; 257 \times 4096 \quad \text{(visual tokens)}$$
+
+**Text side:**
+
+$$\text{caption} \;\to\; \text{LLaMA tokenizer} \;\to\; \text{LLaMA embed layer} \;\to\; \mathrm{seq\_len} \times 4096 \quad \text{(text tokens)}$$
+
+**Combined:** Visual tokens and text tokens are concatenated. LLaMA (+ LoRA) predicts the next token
+autoregressively. Cross-entropy loss on text positions only.
+
+### Data
+
+`liuhaotian/LLaVA-Instruct-150K`
 
 ---
 
-## Repository layout
+## Experimental Conditions
 
-```
-configs/
-  encoders.yaml             CLIP ViT-L/14 @ 224 config
-  projector.yaml            MLP connector: 1024 → 4096 → 4096
-  llm.yaml                  LLaMA-2-7B config (HF id, dtype, <image> token)
-  data.yaml                 Bunny-v1.1 · LLaVA-Instruct-150K · COCO val2017 paths
-  captioning.yaml           Generation + COCO val2017 eval config
-  training_stage1.yaml      InfoNCE schedule, learnable τ
-  training_stage2.yaml      LoRA targets, hyperparameters
-  deepspeed/{zero2,zero3}.json
+Four conditions isolate the contributions of Stage 1 (contrastive) and Stage 2 (autoregressive)
+to the modality gap.
 
-src/
-  encoders/
-    base.py                 VisionEncoder protocol
-    clip_encoder.py         Plain CLIP ViT-L/14 wrapper → (B, 257, 1024)
-  models/
-    projector.py            MLP2xGELU (1024 → 4096 → 4096)
-    vlm.py                  Encoder + connector + LLaMA-2 splice
-    checkpoint.py           Save/load helpers
-  data/
-    coco_val2017_loader.py  5 K val images + 5 references each + diagnostic sampler
-    bunny_v1_1_loader.py    Bunny-v1.1 image-caption pairs (Stage 1)
-    llava_instruct_loader.py  LLaVA-Instruct-150K conversations (Stage 2)
-    transforms.py           Image preprocessing (224 default)
-  training/
-    contrastive_loss.py     LearnableTemperature + symmetric InfoNCE
-    stage1_pretrain.py      InfoNCE pretraining loop
-    stage2_sft.py           LoRA SFT loop
-    trainer_utils.py        AdamW + cosine schedule + freeze helpers
-  diagnostics/
-    extract_projected.py    Per-condition (image, text) row extraction in ℝ⁴⁰⁹⁶
-    metrics.py              Spec metrics + Float64 discipline
-    plots.py                Per-condition figures + trajectory plot
-  captioning/
-    inference.py            VLM.generate loop over COCO val2017
-    evaluation.py           Generic pycocoevalcap scorer
-  evaluation/
-    vlmevalkit_adapter.py   LlamaConnectorVLM adapter for VLMEvalKit
-  utils/{io,reproducibility,distributed}.py
+### C0: No Training (Baseline)
 
-scripts/
-  00_setup_env.sh
-  01_download_data.sh       COCO val2017 + train2017 + Bunny-v1.1 + LLaVA-Instruct-150K
-  03_compute_gap.py         Per-condition gap metrics → JSON
-  04_make_plots.py          Per-condition figures + trajectory
-  05_train_stage1.py        InfoNCE pretraining
-  06_train_stage2.py        LoRA SFT
-  07_extract_projected.py   --condition {C0,C1_stage2,C2_stage1,C3_stage1,C3_stage2}
-  08_run_captioning.py      --condition <tag> → captions_<tag>.json
-  09_score_captions.py      --condition <tag> → captioning_<tag>.json
-  10_run_vlmevalkit.py      --condition <tag> → vlmevalkit_<tag>.json
-  run_condition.py          End-to-end orchestrator for C0/C1/C2/C3
+- Connector: random initialisation
+- LLaMA: pre-trained weights, no LoRA
+- **Nothing is trained. Stage 1 is not run. Stage 2 is not run.**
+- Measure the modality gap
 
-tests/
-  test_clip_encoder.py
-  test_projector.py
-  test_contrastive_loss.py
-  test_metrics.py
-  test_data_loader.py
-  test_conditions.py        Dry-run smoke for the 4-condition orchestrator
-```
+### C1: Stage 2 Only (No Contrastive Preparation)
+
+- Stage 1 is not run
+- Connector: starts random, **trained** directly in Stage 2
+- LLaMA + LoRA: **trained**
+- Run Stage 2 → measure the modality gap after Stage 2
+
+### C2: Stage 1 Only (No Autoregressive Refinement)
+
+- Run Stage 1: train connector with contrastive loss → save checkpoint
+- Measure the modality gap after Stage 1
+- Plug connector into LLM. **Stage 2 is not run.**
+- Evaluate zero-shot captioning performance
+
+### C3: Full Pipeline (Stage 1 + Stage 2)
+
+- Run Stage 1: train connector with contrastive loss → save checkpoint
+- Measure the modality gap after Stage 1
+- Load trained connector into Stage 2; connector **refined** during Stage 2; LLaMA + LoRA **trained**
+- Run Stage 2 → measure the modality gap after Stage 2
+
+### Conditions Summary
+
+| | Connector init | Stage 1 (contrastive) | Stage 2 (autoregressive) |
+|:---|:---:|:---:|:---:|
+| **C0** | Random | ✗ | ✗ |
+| **C1** | Random | ✗ | ✓ |
+| **C2** | Random | ✓ | ✗ |
+| **C3** | Random | ✓ | ✓ |
+
+---
+
+## Modality Gap Measurement
+
+All measurements are taken at the **connector output** (4096-dim), comparing image embeddings from the
+connector against text embeddings from LLaMA's embedding layer. The same evaluation set is used for
+every measurement.
+
+### Embeddings Compared
+
+$$\mathbf{z}_{\mathrm{img}} = \mathrm{mean\text{-}pool}\!\bigl(\mathrm{Connector}(\mathrm{ViT}(\mathrm{image}))\bigr) \in \mathbb{R}^{4096}$$
+
+$$\mathbf{z}_{\mathrm{txt}} = \mathrm{mean\text{-}pool}\!\bigl(\mathrm{LLaMA\_embed}(\mathrm{tokenize}(\mathrm{caption}))\bigr) \in \mathbb{R}^{4096}$$
+
+### Measurement Schedule
+
+| When | C0 | C1 | C2 | C3 |
+|:---|:---:|:---:|:---:|:---:|
+| At initialisation (random connector) | ✓ | — | — | — |
+| After Stage 1 (contrastive) | — | — | ✓ | ✓ |
+| After Stage 2 (autoregressive) | — | ✓ | — | ✓ |
+
+This produces **5 gap measurements**: 1 from C0, 1 from C1, 1 from C2, and 2 from C3.
+
+### Key Comparisons
+
+| Comparison | Variable isolated | Question answered |
+|:---|:---|:---|
+| C0 vs C2 | Stage 1 alone | Does contrastive training reduce the gap? |
+| C0 vs C1 | Stage 2 alone | Does autoregressive training reduce the gap? |
+| C1 vs C3 | Effect of Stage 1 preparation | Does contrastive pre-training help Stage 2? |
+| C2 vs C3 | Effect of Stage 2 refinement | Does autoregressive refinement further close the gap? |
+
+The **core comparison is C1 vs C3**. If C3's gap is significantly smaller than C1's, then contrastive
+pre-training (Stage 1) provides a measurable benefit that autoregressive training alone cannot achieve.
+If they are similar, Stage 1 was unnecessary.
+
+---
+
+## Metrics
+
+All metrics are computed at the connector output (4096-dim) at each measurement point in the schedule above.
+
+### Geometric Metrics
+
+| Metric | What it measures |
+|:---|:---|
+| Centroid distance | First-order gap magnitude |
+| Power-law exponent α | Semantic hierarchy preservation |
+| JS divergence | Angular topology mismatch |
+| k-NN mixing rate | Manifold penetration |
+| ‖β‖, ‖γ‖ | Bias decomposition (PMB, COB) |
+| κ(Σ_U), κ(Σ_V) | Residual anisotropy |
+| Effective rank | Representation compactness |
+| Trace | Global variance scale |
+
+### Downstream Performance
+
+Evaluated for conditions C1, C2, and C3 (C0 has no trained LLM).
+
+| Category | Benchmarks |
+|:---|:---|
+| General Perception | MME, MMStar, ScienceQA-image, RealWorldQA |
+| Complex Reasoning | MMMU, MMMU-Pro, VisuLogic, LogicVista |
+| Hallucination | CRPE, POPE, HallusionBench |
+| Captioning Quality | CIDEr, BLEU-4, METEOR (COCO val2017) |
+
+### Visualisation
+
+PCA visualisations of the combined image and text embedding distributions (4096-dim) for all conditions,
+projecting onto the first two principal components. Additionally, gap decomposition plots showing how the
+bias (β, γ) and residual anisotropy (κ) evolve from C0 through C2 to C3.
+
+### Evaluation Data
+
+COCO val2017: 5,000 images with 5 captions each. This is the evaluation set used for every measurement
+point across all conditions. No overlap with Stage 1 or Stage 2 training data.
 
 ---
 
@@ -217,7 +283,7 @@ bash scripts/01_download_data.sh
 
 ---
 
-## Running the ablation
+## Running the Ablation
 
 Each condition is fully orchestrated by `scripts/run_condition.py`:
 
@@ -228,7 +294,7 @@ python scripts/run_condition.py --condition C2   # Stage 1 only, zero-shot LLM
 python scripts/run_condition.py --condition C3   # Stage 1 → Stage 2
 ```
 
-Per-step invocation is also supported:
+Per-step invocation:
 
 ```bash
 # Stage 1 InfoNCE pretraining
@@ -244,35 +310,61 @@ python scripts/03_compute_gap.py --condition C3_stage1
 python scripts/04_make_plots.py --condition C3_stage1
 
 # Downstream
-python scripts/08_run_captioning.py --condition C3_stage2 \
-       --vlm-checkpoint outputs/checkpoints/stage2_vlm_C3.pt
+python scripts/08_run_captioning.py --condition C3_stage2
 python scripts/09_score_captions.py --condition C3_stage2
-python scripts/10_run_vlmevalkit.py --condition C3_stage2 \
-       --vlm-checkpoint outputs/checkpoints/stage2_vlm_C3.pt
+python scripts/10_run_vlmevalkit.py --condition C3_stage2
 ```
 
 ### Tests
 
 ```bash
-pytest tests/ -v                            # full suite
-pytest tests/ -m "not slow and not gpu"     # fast CI subset (no model loading)
+pytest tests/ -v                            # full suite (95 tests)
+pytest tests/ -m "not slow and not gpu"     # fast CI subset
+```
+
+---
+
+## Repository Layout
+
+```
+configs/
+  encoders.yaml             CLIP ViT-L/14 @ 224 config
+  projector.yaml            MLP connector: 1024 → 4096 → 4096
+  llm.yaml                  LLaMA-2-7B config
+  data.yaml                 Bunny-v1.1 · LLaVA-Instruct-150K · COCO val2017
+  captioning.yaml           Generation + COCO val2017 eval config
+  training_stage1.yaml      InfoNCE schedule, learnable τ
+  training_stage2.yaml      LoRA targets, hyperparameters
+
+src/
+  encoders/clip_encoder.py  CLIP ViT-L/14 → (B, 257, 1024)
+  models/projector.py       MLP2xGELU (1024 → 4096 → 4096)
+  models/vlm.py             Encoder + connector + LLaMA-2 splice
+  data/coco_val2017_loader.py
+  data/bunny_v1_1_loader.py
+  data/llava_instruct_loader.py
+  training/contrastive_loss.py   Symmetric InfoNCE with learnable τ
+  training/stage1_pretrain.py
+  training/stage2_sft.py
+  diagnostics/metrics.py    Spec metrics + Float64 discipline
+  diagnostics/plots.py      Per-condition figures + trajectory
+  evaluation/vlmevalkit_adapter.py
+
+scripts/
+  01_download_data.sh
+  05_train_stage1.py  ·  06_train_stage2.py
+  07_extract_projected.py   --condition {C0,C1,C2,C3-stage1,C3-stage2}
+  08_run_captioning.py  ·  09_score_captions.py  ·  10_run_vlmevalkit.py
+  run_condition.py          End-to-end orchestrator
 ```
 
 ---
 
 ## Reproducibility
 
-Every script writes alongside its outputs:
-
-- Config snapshot (full YAML used)
-- Git commit hash
-- `pip freeze` dump
-- Random seeds (numpy, torch, Python)
-- Hardware info (GPU model, CUDA version, driver)
-- Walltime and peak GPU memory
-
-`torch.backends.cudnn.deterministic = True` and `benchmark = False` are set globally.
-Single-GPU Float32 runs are bit-exact reproducible; multi-GPU bf16 runs are not.
+Every script writes alongside its outputs a config snapshot, git commit hash, `pip freeze` dump, random
+seeds, hardware info, and walltime. `torch.backends.cudnn.deterministic = True` and `benchmark = False`
+are set globally.
 
 ---
 
@@ -334,5 +426,4 @@ Single-GPU Float32 runs are bit-exact reproducible; multi-GPU bf16 runs are not.
 
 ## License
 
-MIT (project code). Vendored third-party code retains its original license — see
-`THIRD_PARTY_LICENSES.md`.
+MIT (project code). Vendored third-party code retains its original license — see `THIRD_PARTY_LICENSES.md`.

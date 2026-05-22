@@ -208,18 +208,29 @@ def main():
 
     # Print key metrics.
     print("\n[smoke] === C0_random gap metrics ===")
-    for k in ("G_mu", "power_law_alpha", "js_divergence_angular",
-              "knn_mixing_rate", "beta_norm", "gamma_norm",
-              "kappa_image", "kappa_text", "effective_rank", "trace_image"):
-        v = metrics.get(k)
-        if v is not None:
+    spec = metrics.to_dict().get("spec_metrics", {})
+    for k in ("G_mu", "alpha_image", "alpha_text", "js_divergence_angular",
+              "knn_mixing_rate_k20", "beta_norm", "gamma_norm",
+              "kappa_image", "kappa_text", "eff_rank_image", "trace_image"):
+        v = spec.get(k)
+        if v is not None and not (isinstance(v, float) and v != v):
             print(f"  {k}: {v:.4f}")
         else:
-            print(f"  {k}: (not computed)")
+            print(f"  {k}: nan (expected for random connector at n=50)")
 
     metrics_path = out_dir / "metrics_C0_random.json"
+    metrics_dict = metrics.to_dict()
+    # JSON-serialize — replace nan/inf with null.
+    def _safe(v):
+        if isinstance(v, float) and (v != v or abs(v) == float("inf")):
+            return None
+        if isinstance(v, (int, float, np.floating)):
+            return float(v)
+        return v
     with metrics_path.open("w") as f:
-        json.dump({k: float(v) for k, v in metrics.items() if isinstance(v, (int, float, np.floating))}, f, indent=2)
+        import dataclasses
+        flat = {k: _safe(v) for k, v in spec.items()}
+        json.dump({"n_pairs": len(pairs), "condition": "C0_random", "spec_metrics": flat}, f, indent=2)
     print(f"\n[smoke] metrics saved to {metrics_path}")
 
     # ---- figures ----
@@ -230,7 +241,7 @@ def main():
     print(f"[smoke] figures written to {figs_dir}  ({time.time()-t0:.1f}s)")
 
     traj_dir = out_dir / "trajectory"
-    plot_gap_decomposition({"C0_random": metrics}, traj_dir)
+    plot_gap_decomposition({"C0_random": spec}, traj_dir)
     print(f"[smoke] trajectory plot written to {traj_dir}")
 
     # ---- summary ----
