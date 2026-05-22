@@ -57,9 +57,11 @@ class BunnyV11Dataset:
         root: str | Path,
         manifest_name: str | None = None,
         image_root: str | Path | None = None,
+        limit: int | None = None,
     ):
         self.root = Path(root)
         self.image_root = Path(image_root) if image_root else self.root
+        self.limit = int(limit) if limit is not None else None
         if manifest_name is not None:
             self.manifest = self.root / manifest_name
         else:
@@ -86,12 +88,16 @@ class BunnyV11Dataset:
                 yield blob
 
     def __iter__(self) -> Iterator[BunnyPair]:
+        n = 0
         for row in self._iter_rows():
             cap = _extract_caption(row)
             img = row.get("image") or row.get("image_path") or row.get("img")
             if not cap or not img:
                 continue
             yield BunnyPair(image_path=self.image_root / img, caption=cap)
+            n += 1
+            if self.limit is not None and n >= self.limit:
+                return
 
 
 def load_image(path: str | Path) -> Image.Image:

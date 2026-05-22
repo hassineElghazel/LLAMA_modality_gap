@@ -71,6 +71,8 @@ def main():
     p.add_argument("--llm-config", default="configs/llm.yaml")
     p.add_argument("--data-config", default="configs/data.yaml")
     p.add_argument("--max-steps", type=int, default=None, help="cap training at N steps (smoke runs)")
+    p.add_argument("--subset-size", type=int, default=None,
+                   help="train on only the first N Bunny pairs (pilot runs)")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
@@ -92,7 +94,9 @@ def main():
     )
 
     bunny_cfg = data_cfg["bunny_v1_1"]
-    dataset = BunnyV11Dataset(root=bunny_cfg["local_path"])
+    dataset = BunnyV11Dataset(root=bunny_cfg["local_path"], limit=args.subset_size)
+    if args.subset_size is not None:
+        print(f"[stage1] subset: training on first {args.subset_size:,} pairs")
     dataloader = _iter_batches(dataset, cfg["batch"]["per_device_batch_size"])
 
     ckpt = train_stage1(

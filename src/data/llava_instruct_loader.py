@@ -38,9 +38,11 @@ class LLaVAInstruct150KDataset:
         root: str | Path,
         image_root: str | Path,
         manifest_name: str | None = None,
+        limit: int | None = None,
     ):
         self.root = Path(root)
         self.image_root = Path(image_root)
+        self.limit = int(limit) if limit is not None else None
         if manifest_name is not None:
             self.manifest = self.root / manifest_name
         else:
@@ -57,6 +59,8 @@ class LLaVAInstruct150KDataset:
     def __iter__(self) -> Iterator[LLaVAInstructItem]:
         with self.manifest.open() as f:
             rows = json.load(f)
+        if self.limit is not None:
+            rows = rows[: self.limit]
         for r in rows:
             img = r.get("image")
             if not img:

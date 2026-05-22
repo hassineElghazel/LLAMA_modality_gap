@@ -107,6 +107,8 @@ def main():
                    help="override init_from.connector_checkpoint (use 'random' for C1)",
                    default=None)
     p.add_argument("--max-steps", type=int, default=None)
+    p.add_argument("--subset-size", type=int, default=None,
+                   help="train on only the first N LLaVA items (pilot runs)")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
@@ -148,7 +150,10 @@ def main():
     dataset = LLaVAInstruct150KDataset(
         root=llava_cfg["local_path"],
         image_root=llava_cfg["image_root"],
+        limit=args.subset_size,
     )
+    if args.subset_size is not None:
+        print(f"[stage2] subset: training on first {args.subset_size:,} items")
     dataloader = _iter_batches(
         dataset, tokenizer, image_token_id, cfg["batch"]["per_device_batch_size"]
     )
