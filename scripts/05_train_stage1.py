@@ -22,8 +22,12 @@ from src.utils.reproducibility import set_seed
 
 
 def _load_llama_embed(hf_id: str, device: str, dtype_str: str) -> tuple[nn.Module, "AutoTokenizer"]:
-    """Extract just the LLaMA-2 embedding layer and tokenizer (rest is unused
-    in Stage 1; we drop the LM weights to stay under the 16GB dev-GPU budget).
+    """Extract just the LLaMA-2 embedding layer and tokenizer.
+
+    The full LLM is loaded onto CPU RAM (not GPU VRAM) so that GPUs with
+    <14 GB (e.g. RTX 2080 Ti at 11 GB) are not affected. We extract the
+    32000×4096 embedding weight (~250 MB fp16) then immediately discard the
+    rest of the model. The extracted embedding is moved to the target device.
     """
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -31,12 +35,12 @@ def _load_llama_embed(hf_id: str, device: str, dtype_str: str) -> tuple[nn.Modul
     tokenizer = AutoTokenizer.from_pretrained(hf_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(hf_id, torch_dtype=dtype)
+    # Load entirely on CPU — uses ~14 GB system RAM, not GPU VRAM.
+    model = AutoModelForCausalLM.from_pretrained(hf_id, torch_dtype=dtype, device_map="cpu")
     embed = model.get_input_embeddings()
-    # Copy weights out so we can drop the rest of the LM and free memory.
     weight = embed.weight.detach().clone()
     new_embed = nn.Embedding.from_pretrained(weight, freeze=True).to(device)
-    del model, embed
+    del model, embed, weight
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     return new_embed, tokenizer

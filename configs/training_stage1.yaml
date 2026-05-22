@@ -39,7 +39,9 @@ schedule:
   num_epochs: 1
 
 batch:
-  per_device_batch_size: 64   # InfoNCE benefits from larger batches; tune to fit 16GB
+  # InfoNCE benefits from larger batches. Stage 1 loads LLaMA-2 onto CPU RAM
+  # (not GPU VRAM), so 11 GB GPU is sufficient. Reduce if CPU RAM is <32 GB.
+  per_device_batch_size: 64
   gradient_accumulation_steps: 1
 
 precision:

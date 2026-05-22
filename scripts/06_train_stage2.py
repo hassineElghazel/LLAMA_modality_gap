@@ -133,10 +133,12 @@ def main():
         print(f"[stage2] connector init: {init}")
 
     # VLM (loads LLaMA-2-7B + sets up the splice path).
+    quant_cfg = llm_cfg.get("quantization", {})
     vlm = VLM(encoder, connector, VLMConfig(
         llm_hf_id=llm_cfg["model"]["hf_id"],
         weights_dtype=llm_cfg["dtype"]["weights"],
         device=device,
+        load_in_4bit=bool(quant_cfg.get("load_in_4bit", False)),
     )).load_llm()
     tokenizer = vlm._tokenizer
     image_token_id = vlm._image_token_id

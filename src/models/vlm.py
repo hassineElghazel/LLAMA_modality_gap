@@ -23,6 +23,8 @@ class VLMConfig:
     image_token: str = "<image>"
     weights_dtype: str = "bfloat16"
     device: str = "cuda"
+    # Set True to load the LLM in 4-bit NF4 (QLoRA) — required for GPUs <14 GB.
+    load_in_4bit: bool = False
 
 
 class VLM(nn.Module):
@@ -60,9 +62,26 @@ class VLM(nn.Module):
         self._tokenizer.add_special_tokens({"additional_special_tokens": [self.cfg.image_token]})
         self._image_token_id = self._tokenizer.convert_tokens_to_ids(self.cfg.image_token)
 
-        self._llm = AutoModelForCausalLM.from_pretrained(
-            self.cfg.llm_hf_id, torch_dtype=dtype
-        ).to(self.cfg.device)
+        if self.cfg.load_in_4bit:
+            # QLoRA: 4-bit NF4 with bfloat16 compute. Reduces LLaMA-2-7B from
+            # ~14 GB (bfloat16) to ~3.5 GB, fitting an 11 GB GPU.
+            from transformers import BitsAndBytesConfig
+            bnb_cfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=dtype,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+            )
+            self._llm = AutoModelForCausalLM.from_pretrained(
+                self.cfg.llm_hf_id,
+                quantization_config=bnb_cfg,
+                device_map="auto",
+            )
+        else:
+            self._llm = AutoModelForCausalLM.from_pretrained(
+                self.cfg.llm_hf_id, torch_dtype=dtype
+            ).to(self.cfg.device)
+
         # Resize embeddings to account for the new special token.
         self._llm.resize_token_embeddings(len(self._tokenizer))
         return self

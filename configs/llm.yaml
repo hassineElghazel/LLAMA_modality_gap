@@ -11,6 +11,14 @@ dtype:
   weights: bfloat16
   compute: bfloat16
 
+# 4-bit NF4 QLoRA: required for GPUs with <14 GB VRAM (e.g. RTX 2080 Ti 11 GB).
+# Set load_in_4bit: false on A100 / H100 where bfloat16 fits natively.
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: bfloat16
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+
 generation:
   do_sample: false
   num_beams: 1
