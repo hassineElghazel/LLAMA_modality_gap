@@ -151,7 +151,9 @@ def residual_ratio(X, Y) -> float:
     g2 = float(np.linalg.norm(X.mean(axis=0) - Y.mean(axis=0)) ** 2)
     denom = g2 + tr
     if denom <= 0:
-        return float("nan")
+        # Both numerator and denominator vanish (X == Y up to centering):
+        # there is no gap, hence no residual fraction.
+        return 0.0
     return tr / denom
 
 

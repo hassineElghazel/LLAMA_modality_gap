@@ -20,4 +20,5 @@ einops
 Pillow
 huggingface-hub
 datasets
-vlmeval
+# Optional (downstream benchmarks only): install separately
+#   pip install "vlmeval @ git+https://github.com/open-compass/VLMEvalKit.git"

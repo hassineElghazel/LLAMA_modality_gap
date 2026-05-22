@@ -32,6 +32,7 @@ def score_predictions(
     references: dict[int, list[str]],
     out_path: str | Path,
     *,
+    include_meteor: bool = True,
     include_spice: bool = True,
 ) -> dict:
     """Score predictions against a references dict.
@@ -51,9 +52,10 @@ def score_predictions(
 
     scorers: list[tuple[object, object]] = [
         (Bleu(4), ["BLEU-1", "BLEU-2", "BLEU-3", "BLEU-4"]),
-        (Meteor(), "METEOR"),
         (Cider(), "CIDEr"),
     ]
+    if include_meteor:
+        scorers.append((Meteor(), "METEOR"))
     if include_spice:
         scorers.append((Spice(), "SPICE"))
 

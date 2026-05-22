@@ -32,13 +32,15 @@ dependencies = [
   "Pillow",
   "huggingface-hub",
   "datasets",
-  # VLMEvalKit: downstream benchmark harness (MME, MMStar, MMMU, POPE, etc.).
-  "vlmeval",
 ]
 
 [project.optional-dependencies]
 train = ["deepspeed>=0.14"]
 dev = ["pytest", "pytest-cov", "ruff", "black"]
+# VLMEvalKit ships only from GitHub (open-compass/VLMEvalKit); install
+# separately when running downstream benchmarks:
+#   pip install "vlmeval @ git+https://github.com/open-compass/VLMEvalKit.git"
+eval = []
 
 [tool.setuptools.packages.find]
 where = ["."]

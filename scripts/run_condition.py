@@ -69,7 +69,9 @@ def _downstream(condition_tag: str, vlm_ckpt: str, dry: bool, skip_benchmarks: b
               "--condition", condition_tag, "--vlm-checkpoint", vlm_ckpt], dry)
 
 
-def run_c0(dry: bool, _stage_extra: list[str]) -> None:
+def run_c0(dry: bool, stage_extra: list[str]) -> None:
+    # Stage args unused (C0 trains nothing) but accepted for dispatch parity.
+    del stage_extra
     _measure("C0_random", connector_override="random", dry=dry)
 
 

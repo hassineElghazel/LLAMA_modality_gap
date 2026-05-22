@@ -58,7 +58,10 @@ def test_isotropic_residual(rng):
     X = rng.standard_normal((n, d))
     # Y = X plus independent isotropic noise -> residual is isotropic.
     Y = X + rng.standard_normal((n, d))
-    assert anisotropy_ratio(X, Y) == pytest.approx(1.0, rel=0.15)
+    # A_r is biased upward by Marchenko-Pastur edge fluctuations:
+    # lambda_max / mean(lambda) -> (1+sqrt(d/n))^2 in finite samples, ~1.24
+    # at d/n=64/5000. Tolerance reflects that.
+    assert anisotropy_ratio(X, Y) == pytest.approx(1.0, rel=0.3)
     assert effective_dimension(X, Y) == pytest.approx(d, rel=0.15)
 
 
