@@ -7,6 +7,7 @@ connector parameters + the learnable log-temperature receive gradients.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Iterator
 
@@ -102,12 +103,25 @@ def main():
     )
     if args.subset_size is not None:
         print(f"[stage1] subset: training on first {args.subset_size:,} pairs")
-    dataloader = _iter_batches(dataset, cfg["batch"]["per_device_batch_size"])
 
-    n_pairs = args.subset_size or "all"
+    # Inject total_steps so the cosine LR schedule spans the actual run length.
+    # Without this, the trainer falls back to 1000 steps and the cosine
+    # oscillates back up once step > 1000 (cosine_with_warmup has no clamp).
+    batch_size = cfg["batch"]["per_device_batch_size"]
+    num_epochs = cfg["schedule"]["num_epochs"]
+    n_pairs = len(dataset)
+    cfg["total_steps"] = math.ceil(n_pairs / batch_size) * num_epochs
+    print(f"[stage1] schedule: total_steps={cfg['total_steps']:,} "
+          f"(pairs={n_pairs:,} batch={batch_size} epochs={num_epochs})")
+
+    dataloader = _iter_batches(dataset, batch_size)
+
+    pairs_label = args.subset_size or "all"
+    device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
-        f"[Stage1 C2] training started on {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}\n"
-        f"pairs={n_pairs}  batch={cfg['batch']['per_device_batch_size']}  lr={cfg['optimizer']['lr']}"
+        f"[Stage1 C2] training started on {device_label}\n"
+        f"pairs={pairs_label}  batch={batch_size}  lr={cfg['optimizer']['lr']}\n"
+        f"total_steps={cfg['total_steps']:,}"
     )
     try:
         ckpt = train_stage1(

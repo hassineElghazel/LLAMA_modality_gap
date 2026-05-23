@@ -89,6 +89,19 @@ class BunnyV11Dataset:
             else:
                 yield blob
 
+    def __len__(self) -> int:
+        """Number of (image, caption) pairs the dataset will yield.
+
+        Honors ``limit`` if set; otherwise counts manifest entries once and
+        caches the result. Counting the 2M-row manifest takes ~1-2s and only
+        runs once per process.
+        """
+        if self.limit is not None:
+            return int(self.limit)
+        if not hasattr(self, "_cached_len"):
+            self._cached_len = sum(1 for _ in self._iter_rows())
+        return self._cached_len
+
     def __iter__(self) -> Iterator[BunnyPair]:
         n = 0
         for row in self._iter_rows():
