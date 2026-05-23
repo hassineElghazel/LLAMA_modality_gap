@@ -27,6 +27,6 @@ cd ~/LLAMA_modality_gap
 mkdir -p outputs/logs
 
 echo "[slurm] running C2 — full Bunny-v1.1 (~750k pairs, no subset limit)"
-python scripts/run_condition.py --condition C2
+python scripts/run_condition.py --condition C2 --subset-size 750000
 
 echo "[slurm] C2 complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
