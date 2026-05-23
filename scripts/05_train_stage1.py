@@ -95,7 +95,11 @@ def main():
     )
 
     bunny_cfg = data_cfg["bunny_v1_1"]
-    dataset = BunnyV11Dataset(root=bunny_cfg["local_path"], limit=args.subset_size)
+    dataset = BunnyV11Dataset(
+        root=bunny_cfg["local_path"],
+        image_root=bunny_cfg.get("image_root"),
+        limit=args.subset_size,
+    )
     if args.subset_size is not None:
         print(f"[stage1] subset: training on first {args.subset_size:,} pairs")
     dataloader = _iter_batches(dataset, cfg["batch"]["per_device_batch_size"])

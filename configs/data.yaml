@@ -19,7 +19,8 @@ diagnostic_sample:
 # Stage 1 contrastive pretraining data.
 bunny_v1_1:
   hf_repo: BoyaWu10/Bunny-v1_1-data
-  local_path: data/bunny_v1_1
+  local_path: data/bunny_v1_1/pretrain
+  image_root: data/bunny_v1_1/pretrain/images
 
 # Stage 2 autoregressive captioning data.
 llava_instruct_150k:
