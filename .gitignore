@@ -1,7 +1,5 @@
 # Data and model artifacts (large, regenerable)
-data/coco/
-data/bunny_pretrain/
-data/internvl_sft/
+data/
 references/
 outputs/
 *.pt
