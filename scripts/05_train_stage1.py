@@ -17,6 +17,7 @@ from src.data.bunny_v1_1_loader import BunnyV11Dataset, load_image
 from src.encoders.clip_encoder import build_clip_encoder
 from src.models.projector import build_projector
 from src.training.stage1_pretrain import train_stage1
+from src.utils import notify
 from src.utils.io import load_yaml, snapshot_run_metadata
 from src.utils.reproducibility import set_seed
 
@@ -99,15 +100,25 @@ def main():
         print(f"[stage1] subset: training on first {args.subset_size:,} pairs")
     dataloader = _iter_batches(dataset, cfg["batch"]["per_device_batch_size"])
 
-    ckpt = train_stage1(
-        encoder=encoder,
-        connector=connector,
-        llm_embed=llm_embed,
-        tokenizer=tokenizer,
-        dataloader=dataloader,
-        cfg=cfg,
-        max_steps=args.max_steps,
+    n_pairs = args.subset_size or "all"
+    notify.send(
+        f"[Stage1 C2] training started on {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}\n"
+        f"pairs={n_pairs}  batch={cfg['batch']['per_device_batch_size']}  lr={cfg['optimizer']['lr']}"
     )
+    try:
+        ckpt = train_stage1(
+            encoder=encoder,
+            connector=connector,
+            llm_embed=llm_embed,
+            tokenizer=tokenizer,
+            dataloader=dataloader,
+            cfg=cfg,
+            max_steps=args.max_steps,
+        )
+    except Exception as exc:
+        notify.send(f"[Stage1 C2] FAILED: {exc}")
+        raise
+    notify.send(f"[Stage1 C2] training complete — checkpoint saved to {ckpt}")
     snapshot_run_metadata(
         {"stage1": cfg, "step": "train_stage1", "args": vars(args)},
         Path("outputs/runs") / f"stage1_{Path(cfg['output']['checkpoint_path']).stem}",

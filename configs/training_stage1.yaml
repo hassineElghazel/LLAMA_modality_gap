@@ -50,6 +50,7 @@ precision:
 logging:
   log_every_steps: 50
   save_every_steps: 500
+  notify_every_steps: 500   # Telegram update every N steps (0 = disabled)
 
 output:
   checkpoint_path: outputs/checkpoints/stage1_connector.pt

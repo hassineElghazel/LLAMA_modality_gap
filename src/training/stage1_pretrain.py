@@ -22,6 +22,7 @@ from torch import nn
 from ..encoders.clip_encoder import CLIPViTL14Encoder
 from ..models.checkpoint import save_projector
 from ..models.projector import MLP2xGELU
+from ..utils import notify
 from .contrastive_loss import LearnableTemperature, symmetric_infonce
 from .trainer_utils import build_adamw, cosine_with_warmup, freeze_module
 
@@ -106,6 +107,7 @@ def train_stage1(
 
     log_every = cfg["logging"]["log_every_steps"]
     save_every = cfg["logging"]["save_every_steps"]
+    notify_every = cfg["logging"].get("notify_every_steps", 0)
     ckpt_path = Path(cfg["output"]["checkpoint_path"])
 
     step = 0
@@ -142,11 +144,18 @@ def train_stage1(
             step += 1
 
             if step % log_every == 0:
+                lr_now = scheduler.get_last_lr()[0]
                 console.log(
-                    f"[stage1] epoch={epoch} step={step} "
+                    f"[stage1] epoch={epoch} step={step}/{total_steps} "
                     f"loss={loss.item():.4f} tau={temp.temperature:.4f} "
-                    f"lr={scheduler.get_last_lr()[0]:.2e}"
+                    f"lr={lr_now:.2e}"
                 )
+                if notify_every and step % notify_every == 0:
+                    pct = 100 * step / total_steps
+                    notify.send(
+                        f"[Stage1 C2] step {step}/{total_steps} ({pct:.0f}%)\n"
+                        f"loss={loss.item():.4f}  tau={temp.temperature:.4f}  lr={lr_now:.2e}"
+                    )
             if progress_cb is not None:
                 progress_cb(step, float(loss.item()), float(temp.temperature))
             if save_every and step % save_every == 0:
