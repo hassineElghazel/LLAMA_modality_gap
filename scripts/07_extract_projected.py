@@ -117,11 +117,27 @@ def main():
     )
     save_projected(blob, args.out_dir, args.condition)
 
+    runs_dir = Path("outputs/runs") / args.condition
     snapshot_run_metadata(
-        {"condition": args.condition, "connector_ckpt": ckpt, "args": vars(args)},
-        Path(args.out_dir),
+        {
+            "condition": args.condition,
+            "connector_ckpt": ckpt,
+            "step": "extract_projected",
+            "args": vars(args),
+        },
+        runs_dir,
+        config_files={
+            "encoders": args.encoders_config,
+            "projector": args.projector_config,
+            "llm": args.llm_config,
+            "data": args.data_config,
+        },
+        extra_files={
+            "diagnostic_manifest": data_cfg["diagnostic_sample"]["manifest_path"],
+        },
     )
     print(f"[ok] saved projected embeddings condition={args.condition} to {args.out_dir}")
+    print(f"[ok] wrote run metadata to {runs_dir / 'metadata.json'}")
 
 
 if __name__ == "__main__":

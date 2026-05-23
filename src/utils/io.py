@@ -6,6 +6,7 @@ info — that's what ``snapshot_run_metadata`` does.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import subprocess
@@ -51,8 +52,29 @@ def _safe_run(cmd: list[str]) -> str:
         return f"<unavailable: {e}>"
 
 
-def snapshot_run_metadata(config: dict, out_dir: str | Path) -> Path:
-    """Write a metadata.json next to a run's outputs capturing reproducibility info."""
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def snapshot_run_metadata(
+    config: dict,
+    out_dir: str | Path,
+    *,
+    config_files: dict[str, str | Path] | None = None,
+    extra_files: dict[str, str | Path] | None = None,
+) -> Path:
+    """Write a metadata.json next to a run's outputs capturing reproducibility info.
+
+    Optional arguments:
+      config_files: mapping name -> YAML path. Each file's parsed content AND
+                    its SHA256 are embedded so future runs can be byte-compared.
+      extra_files:  mapping name -> path. Only the SHA256 is recorded (useful
+                    for large artifacts like the diagnostic manifest).
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {
@@ -64,6 +86,31 @@ def snapshot_run_metadata(config: dict, out_dir: str | Path) -> Path:
         "platform": platform.platform(),
         "pip_freeze": _safe_run([sys.executable, "-m", "pip", "freeze"]),
     }
+    if config_files:
+        meta["config_files"] = {}
+        for name, p in config_files.items():
+            p = Path(p)
+            entry: dict[str, Any] = {"path": str(p)}
+            if p.exists():
+                entry["sha256"] = _sha256_file(p)
+                try:
+                    entry["content"] = load_yaml(p)
+                except Exception as e:  # noqa: BLE001
+                    entry["content_error"] = f"<unparseable: {e}>"
+            else:
+                entry["missing"] = True
+            meta["config_files"][name] = entry
+    if extra_files:
+        meta["extra_files"] = {}
+        for name, p in extra_files.items():
+            p = Path(p)
+            entry = {"path": str(p)}
+            if p.exists():
+                entry["sha256"] = _sha256_file(p)
+                entry["size_bytes"] = p.stat().st_size
+            else:
+                entry["missing"] = True
+            meta["extra_files"][name] = entry
     try:
         import torch
         meta["torch_version"] = torch.__version__

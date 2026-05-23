@@ -42,12 +42,17 @@ COLORS = {
 
 
 def _style():
-    plt.rcParams.update({
-        "font.family": "serif",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "savefig.dpi": 300,
-    })
+    sns.set_theme(
+        style="whitegrid",
+        context="notebook",
+        font="serif",
+        rc={
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "savefig.dpi": 300,
+            "figure.facecolor": "white",
+        },
+    )
 
 
 def _save(fig: Figure, out_dir: Path, name: str) -> tuple[Path, Path]:
@@ -129,28 +134,37 @@ def figure_B_anisotropic_residual(X, Y, out_dir: Path) -> tuple[Path, Path]:
 
 # ---------- Figure C ----------
 
-def figure_C_pca_scatter(X, Y, out_dir: Path) -> tuple[Path, Path]:
+def figure_C_pca_scatter(X, Y, out_dir: Path, n_components: int = 3) -> tuple[Path, Path]:
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (registers 3d projection)
+
     _style()
     X = _to_f64(X); Y = _to_f64(Y)
-    pca = PCA(n_components=2, random_state=0)
+    pca = PCA(n_components=max(n_components, 3), random_state=0)
     joint = np.vstack([X, Y])
     proj = pca.fit_transform(joint)
     n = X.shape[0]
     Xp, Yp = proj[:n], proj[n:]
     mix = knn_mixing_rate(X, Y, k=20)
+    ev = pca.explained_variance_ratio_
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(Xp[:, 0], Xp[:, 1], s=6, alpha=0.5, c=COLORS["image"], label="image")
-    ax.scatter(Yp[:, 0], Yp[:, 1], s=6, alpha=0.5, c=COLORS["text"], label="text")
-    ax.set_xlabel("PC1")
-    ax.set_ylabel("PC2")
-    ax.set_title("PCA projection of joint embedding pool")
-    ax.text(0.98, 0.02, f"k-NN mixing (k=20) = {mix:.4f}",
-            transform=ax.transAxes, ha="right", va="bottom",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.7))
-    ax.legend()
+    fig = plt.figure(figsize=(7.5, 6.5))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.scatter(Xp[:, 0], Xp[:, 1], Xp[:, 2],
+               s=5, alpha=0.45, c=COLORS["image"], label="image", depthshade=True)
+    ax.scatter(Yp[:, 0], Yp[:, 1], Yp[:, 2],
+               s=5, alpha=0.45, c=COLORS["text"], label="text", depthshade=True)
+    ax.set_xlabel(f"PC1 ({ev[0] * 100:.1f}%)")
+    ax.set_ylabel(f"PC2 ({ev[1] * 100:.1f}%)")
+    ax.set_zlabel(f"PC3 ({ev[2] * 100:.1f}%)")
+    ax.set_title(
+        f"3D PCA of joint embedding pool\n"
+        f"cum. EV(PC1-3) = {ev[:3].sum() * 100:.1f}%   "
+        f"k-NN mix (k=20) = {mix:.4f}"
+    )
+    ax.legend(loc="upper left")
+    ax.view_init(elev=22, azim=-60)
 
-    return _save(fig, out_dir, "figureC_pca_scatter")
+    return _save(fig, out_dir, "figureC_pca_scatter_3d")
 
 
 # ---------- Figure D ----------
