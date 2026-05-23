@@ -2,7 +2,7 @@
 
 model:
   name: llama2_7b
-  hf_id: NousResearch/Llama-2-7b-hf
+  hf_id: meta-llama/Llama-2-7b-hf
   hidden_size: 4096
   # Image placeholder token spliced into the prompt; connector output replaces it.
   image_token: "<image>"
