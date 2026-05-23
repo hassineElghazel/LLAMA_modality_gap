@@ -147,22 +147,32 @@ def figure_C_pca_scatter(X, Y, out_dir: Path, n_components: int = 3) -> tuple[Pa
     mix = knn_mixing_rate(X, Y, k=20)
     ev = pca.explained_variance_ratio_
 
-    fig = plt.figure(figsize=(7.5, 6.5))
+    fig = plt.figure(figsize=(11, 9))
     ax = fig.add_subplot(111, projection="3d")
+
     ax.scatter(Xp[:, 0], Xp[:, 1], Xp[:, 2],
-               s=5, alpha=0.45, c=COLORS["image"], label="image", depthshade=True)
+               s=5, alpha=0.35, c=COLORS["image"],
+               label=f"image (n={n:,})", depthshade=True)
+    # Text cluster may be nearly degenerate (tiny variance) — use large marker
+    # so it is always visible as a distinct cloud / point regardless of scale.
     ax.scatter(Yp[:, 0], Yp[:, 1], Yp[:, 2],
-               s=5, alpha=0.45, c=COLORS["text"], label="text", depthshade=True)
-    ax.set_xlabel(f"PC1 ({ev[0] * 100:.1f}%)")
-    ax.set_ylabel(f"PC2 ({ev[1] * 100:.1f}%)")
-    ax.set_zlabel(f"PC3 ({ev[2] * 100:.1f}%)")
+               s=40, alpha=0.85, c=COLORS["text"],
+               label=f"text  (n={Yp.shape[0]:,})", depthshade=False,
+               edgecolors="white", linewidths=0.3, zorder=10)
+
+    ax.set_xlabel(f"PC1 ({ev[0] * 100:.1f}%)", labelpad=12)
+    ax.set_ylabel(f"PC2 ({ev[1] * 100:.1f}%)", labelpad=12)
+    ax.set_zlabel(f"PC3 ({ev[2] * 100:.1f}%)", labelpad=14)
     ax.set_title(
-        f"3D PCA of joint embedding pool\n"
-        f"cum. EV(PC1-3) = {ev[:3].sum() * 100:.1f}%   "
-        f"k-NN mix (k=20) = {mix:.4f}"
+        f"3D PCA — joint connector-output space\n"
+        f"Cum. EV = {ev[:3].sum() * 100:.1f}%   |   k-NN mixing (k=20) = {mix:.4f}",
+        pad=16,
     )
-    ax.legend(loc="upper left")
-    ax.view_init(elev=22, azim=-60)
+    # Place legend outside the 3-D box so it never overlaps the axes.
+    ax.legend(loc="upper left", bbox_to_anchor=(0.0, 0.92),
+              framealpha=0.9, fontsize=9)
+    ax.view_init(elev=25, azim=-55)
+    fig.subplots_adjust(left=0.0, right=0.88, top=0.92, bottom=0.05)
 
     return _save(fig, out_dir, "figureC_pca_scatter_3d")
 

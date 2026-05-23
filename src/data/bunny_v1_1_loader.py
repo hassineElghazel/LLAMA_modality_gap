@@ -34,13 +34,15 @@ def _extract_caption(row: dict) -> str | None:
         return str(row["text"]).strip()
     convs = row.get("conversations") or row.get("conversation")
     if isinstance(convs, list) and convs:
-        # Prefer the human turn (the prompt); fall back to gpt response.
-        human = next((t for t in convs if str(t.get("from", "")).lower() == "human"), None)
-        if human and human.get("value"):
-            return str(human["value"]).replace("<image>", "").strip()
+        # Prefer the gpt/assistant turn — it contains the actual image description.
+        # The human turn is typically a prompt template ("Describe this image.")
+        # which carries no semantic signal for InfoNCE alignment.
         gpt = next((t for t in convs if str(t.get("from", "")).lower() in ("gpt", "assistant")), None)
         if gpt and gpt.get("value"):
             return str(gpt["value"]).strip()
+        human = next((t for t in convs if str(t.get("from", "")).lower() == "human"), None)
+        if human and human.get("value"):
+            return str(human["value"]).replace("<image>", "").strip()
     return None
 
 

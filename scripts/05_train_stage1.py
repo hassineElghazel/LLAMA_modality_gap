@@ -108,7 +108,17 @@ def main():
         cfg=cfg,
         max_steps=args.max_steps,
     )
-    snapshot_run_metadata({"stage1": cfg, "args": vars(args)}, Path(cfg["output"]["log_dir"]))
+    snapshot_run_metadata(
+        {"stage1": cfg, "step": "train_stage1", "args": vars(args)},
+        Path("outputs/runs") / f"stage1_{Path(cfg['output']['checkpoint_path']).stem}",
+        config_files={
+            "training": args.config,
+            "projector": args.projector_config,
+            "encoders": args.encoders_config,
+            "llm": args.llm_config,
+            "data": args.data_config,
+        },
+    )
     print(f"[ok] Stage 1 connector checkpoint: {ckpt}")
 
 
