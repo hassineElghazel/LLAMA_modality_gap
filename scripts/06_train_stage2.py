@@ -46,7 +46,7 @@ def _format_conversation(convs: list[dict], image_token: str = IMAGE_PLACEHOLDER
     return prompt, response
 
 
-def _llava_collate(items, tokenizer, image_token_id: int, max_length: int = 512):
+def _llava_collate(items, tokenizer, image_token_id: int, max_length: int = 256):
     images = []
     input_ids_list = []
     labels_list = []

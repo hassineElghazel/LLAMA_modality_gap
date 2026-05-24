@@ -18,6 +18,9 @@ source ~/miniforge3/etc/profile.d/conda.sh
 conda activate llama_gap
 export HF_TOKEN=$(cat ~/.cache/huggingface/token)
 
+# CUDA allocator: expandable segments reduces fragmentation OOMs on 11 GB cards.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # Load Telegram credentials if present (set these up once, see README)
 source ~/.telegram_env 2>/dev/null || true
 
