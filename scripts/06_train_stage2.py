@@ -111,14 +111,19 @@ def _maybe_apply_liger() -> None:
     except ImportError:
         print("[stage2] liger-kernel not installed; using stock LLaMA forward")
         return
+    # Only enable fused_linear_cross_entropy — that's the kernel that actually
+    # solves the lm_head OOM. The other liger kernels (RMSNorm/RoPE/SwiGLU)
+    # are speed boosts and depend on torch.distributed.tensor.DTensor, which
+    # is only public in torch >= 2.5 (we run torch 2.3.1).
     apply_liger_kernel_to_llama(
-        rope=True,
+        rope=False,
         cross_entropy=False,
         fused_linear_cross_entropy=True,
-        rms_norm=True,
-        swiglu=True,
+        rms_norm=False,
+        swiglu=False,
     )
-    print("[stage2] liger-kernel applied: fused linear+CE, RoPE, RMSNorm, SwiGLU")
+    print("[stage2] liger-kernel applied: fused linear+CE only "
+          "(other kernels skipped — require torch>=2.5)")
 
 
 def main():
