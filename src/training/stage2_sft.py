@@ -109,6 +109,15 @@ def train_stage2(
     n_trainable = sum(p.numel() for p in trainable)
     console.log(f"[stage2] trainable params: {n_trainable / 1e6:.2f}M")
 
+    # liger's fused linear+CE only activates when self.training is True (it
+    # gates on `self.training and labels is not None`). Without this, lm_head
+    # logits get materialized — the 64 MiB OOM we kept hitting. PEFT defaults
+    # to train mode but the freeze/bnb-4bit sequence here leaves the base LLM
+    # in eval, so we force training mode explicitly.
+    vlm.train()
+    if cfg["freeze"].get("vit", True):
+        vlm.encoder._vision.eval()  # keep frozen ViT's BN/LN stats fixed
+
     opt_cfg = cfg["optimizer"]
     sched_cfg = cfg["schedule"]
     # Precedence: max_steps (smoke runs) > cfg["total_steps"] (injected by the
