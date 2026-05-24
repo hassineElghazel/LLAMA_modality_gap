@@ -29,6 +29,15 @@ cd ~/LLAMA_modality_gap
 # Ensure log dir exists (SLURM creates the file but not the directory)
 mkdir -p outputs/logs
 
+# --- GPU diagnostics (fail-fast if SLURM gave us bad ordinals) ---
+echo "[slurm] node=$(hostname) CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
+nvidia-smi --query-gpu=index,name,memory.free --format=csv || echo "[slurm] nvidia-smi failed"
+python -c "import torch; print(f'[torch] cuda_available={torch.cuda.is_available()} device_count={torch.cuda.device_count()}')" || {
+    echo "[slurm] CUDA init failed — likely bad node allocation. Exiting so job requeues fast." >&2
+    exit 1
+}
+# ---
+
 echo "[slurm] running C1 — Stage 2 LoRA from random connector on LLaVA-Instruct-150K"
 python scripts/run_condition.py --condition C1
 
