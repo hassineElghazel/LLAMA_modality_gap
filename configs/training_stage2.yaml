@@ -39,11 +39,11 @@ schedule:
   num_epochs: 1
 
 batch:
-  # RTX 2080 Ti (11 GB) with 4-bit QLoRA + gradient checkpointing:
-  # batch_size=1 + accum=32 → eff. batch 32 (batch_size=4 OOMs in down_proj).
+  # 2× RTX 2080 Ti (22 GB total) with 4-bit QLoRA + pipeline parallel
+  # (device_map="auto") + gradient checkpointing: batch_size=4 + accum=8 → eff. batch 32.
   # Set per_device_batch_size: 16 and gradient_accumulation_steps: 2 on A100.
-  per_device_batch_size: 1
-  gradient_accumulation_steps: 32
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 8
 
 precision:
   amp: bf16

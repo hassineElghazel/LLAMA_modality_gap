@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=mllm-c1
 #SBATCH --partition=RTX
-#SBATCH --gpus=2080ti:1
+#SBATCH --gpus=2080ti:2
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
