@@ -78,13 +78,23 @@ def train_stage2(
     # activation-memory savings. Required to fit LLaMA-2-7B + 257 visual tokens
     # + bf16 grads on an 11 GB 2080 Ti. Must be enabled before peft wraps the
     # model so the checkpointed forward propagates to LoRA adapters.
+    #
+    # Two gotchas: (1) transformers silently disables GC when use_cache=True;
+    # (2) reentrant GC (the default) doesn't free activations cleanly through
+    # the bnb+LoRA wrapping. Both fixes are required for GC to actually save
+    # memory on this stack.
     if hasattr(vlm._llm, "gradient_checkpointing_enable"):
-        vlm._llm.gradient_checkpointing_enable()
+        if hasattr(vlm._llm, "config"):
+            vlm._llm.config.use_cache = False
+        vlm._llm.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
         # bnb 4-bit base weights have requires_grad=False; without this hook
         # the activation graph is detached and LoRA adapters get no gradient.
         if hasattr(vlm._llm, "enable_input_require_grads"):
             vlm._llm.enable_input_require_grads()
-        console.log("[stage2] gradient checkpointing enabled on base LLM")
+        console.log("[stage2] gradient checkpointing enabled "
+                    "(non-reentrant, use_cache=False)")
 
     lora_cfg = cfg.get("lora") or {}
     if lora_cfg.get("enabled", True):

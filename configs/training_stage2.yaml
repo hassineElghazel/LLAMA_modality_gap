@@ -40,11 +40,15 @@ schedule:
 
 batch:
   # RTX 2080 Ti (11 GB) with 4-bit QLoRA + liger-kernel fused linear+CE +
-  # gradient checkpointing: batch_size=2 + accum=16 → eff. batch 32.
-  # MLP down_proj on bnb-4bit at B=4 OOMs even with liger; B=2 fits comfortably.
+  # working gradient checkpointing (use_cache=False, non-reentrant):
+  # batch_size=1 + accum=32 → eff. batch 32. B=2 OOM'd at down_proj even with
+  # liger because GC was a silent no-op (transformers disables GC when
+  # use_cache=True; the reentrant default also leaks activations through the
+  # bnb+LoRA wrapping). With both GC bugs fixed in stage2_sft.py, B=1 leaves
+  # ample headroom past down_proj and lm_head.
   # Set per_device_batch_size: 16 and gradient_accumulation_steps: 2 on A100.
-  per_device_batch_size: 2
-  gradient_accumulation_steps: 16
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 32
 
 precision:
   amp: bf16
