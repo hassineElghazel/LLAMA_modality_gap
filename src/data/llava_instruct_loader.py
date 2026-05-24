@@ -10,6 +10,7 @@ collator; for that, this loader returns the raw conversation untouched.
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -39,10 +40,14 @@ class LLaVAInstruct150KDataset:
         image_root: str | Path,
         manifest_name: str | None = None,
         limit: int | None = None,
+        shuffle: bool = False,
+        seed: int = 42,
     ):
         self.root = Path(root)
         self.image_root = Path(image_root)
         self.limit = int(limit) if limit is not None else None
+        self.shuffle = shuffle
+        self.seed = seed
         if manifest_name is not None:
             self.manifest = self.root / manifest_name
         else:
@@ -73,6 +78,9 @@ class LLaVAInstruct150KDataset:
 
     def __iter__(self) -> Iterator[LLaVAInstructItem]:
         rows = self._load_rows()
+        if self.shuffle:
+            rows = list(rows)
+            random.Random(self.seed).shuffle(rows)
         if self.limit is not None:
             rows = rows[: self.limit]
         for r in rows:

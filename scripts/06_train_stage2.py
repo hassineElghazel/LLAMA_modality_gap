@@ -182,9 +182,11 @@ def main():
         root=llava_cfg["local_path"],
         image_root=llava_cfg["image_root"],
         limit=args.subset_size,
+        shuffle=True,
+        seed=cfg["seed"],
     )
     if args.subset_size is not None:
-        print(f"[stage2] subset: training on first {args.subset_size:,} items")
+        print(f"[stage2] subset: {args.subset_size:,} items (shuffled, seed={cfg['seed']})")
 
     # Inject total_steps so the cosine LR schedule spans the actual run length.
     # Without this, the trainer falls back to 1000 steps and the cosine

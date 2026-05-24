@@ -39,16 +39,13 @@ schedule:
   num_epochs: 1
 
 batch:
-  # RTX 2080 Ti (11 GB) with 4-bit QLoRA + liger-kernel fused linear+CE +
-  # working gradient checkpointing (use_cache=False, non-reentrant):
-  # batch_size=1 + accum=32 → eff. batch 32. B=2 OOM'd at down_proj even with
-  # liger because GC was a silent no-op (transformers disables GC when
-  # use_cache=True; the reentrant default also leaks activations through the
-  # bnb+LoRA wrapping). With both GC bugs fixed in stage2_sft.py, B=1 leaves
-  # ample headroom past down_proj and lm_head.
+  # RTX 2080 Ti (11 GB): B=4 + accum=8 → eff. batch 32. Smaller LoRA (r=8,
+  # q/v/o only, 27M params) reduces optimizer state enough to fit B=4 with
+  # 4-bit base + GC. Fewer Python-level accumulation iterations → better GPU
+  # utilisation vs B=1+accum=32.
   # Set per_device_batch_size: 16 and gradient_accumulation_steps: 2 on A100.
-  per_device_batch_size: 1
-  gradient_accumulation_steps: 32
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 8
 
 precision:
   amp: bf16
@@ -59,7 +56,7 @@ deepspeed:
   config: configs/deepspeed/zero2.json
 
 logging:
-  log_every_steps: 1
+  log_every_steps: 10
   # Stage 2 has ~4.7k optimizer steps total (LLaVA-Instruct-150K at eff_batch=32).
   # Save every 500 steps so a crash at step 4000 doesn't lose all progress.
   save_every_steps: 500
