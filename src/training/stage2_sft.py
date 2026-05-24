@@ -150,8 +150,6 @@ def train_stage2(
             break
         optimizer.zero_grad(set_to_none=True)
         for micro_idx, batch in enumerate(dataloader):
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             with torch.amp.autocast("cuda", dtype=dtype_amp, enabled=torch.cuda.is_available()):
                 out = vlm(
                     batch["images"],
