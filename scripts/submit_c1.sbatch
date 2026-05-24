@@ -44,6 +44,6 @@ sys.exit(0 if ok else 1)
 # ---
 
 echo "[slurm] running C1 — Stage 2 LoRA from random connector on LLaVA-Instruct-150K"
-python scripts/run_condition.py --condition C1
+python scripts/run_condition.py --condition C1 --subset-size 28800
 
 echo "[slurm] C1 complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
