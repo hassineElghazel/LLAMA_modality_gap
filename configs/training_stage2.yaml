@@ -59,7 +59,7 @@ deepspeed:
   config: configs/deepspeed/zero2.json
 
 logging:
-  log_every_steps: 50
+  log_every_steps: 1
   # Stage 2 has ~4.7k optimizer steps total (LLaVA-Instruct-150K at eff_batch=32).
   # Save every 500 steps so a crash at step 4000 doesn't lose all progress.
   save_every_steps: 500
