@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=mllm-c1
 #SBATCH --partition=RTX
-#SBATCH --gpus=2080ti:2
+#SBATCH --gpus=2080ti:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
@@ -32,7 +32,12 @@ mkdir -p outputs/logs
 # --- GPU diagnostics (fail-fast if SLURM gave us bad ordinals) ---
 echo "[slurm] node=$(hostname) CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 nvidia-smi --query-gpu=index,name,memory.free --format=csv || echo "[slurm] nvidia-smi failed"
-python -c "import torch; print(f'[torch] cuda_available={torch.cuda.is_available()} device_count={torch.cuda.device_count()}')" || {
+python -c "
+import sys, torch
+ok = torch.cuda.is_available() and torch.cuda.device_count() >= 1
+print(f'[torch] cuda_available={torch.cuda.is_available()} device_count={torch.cuda.device_count()}')
+sys.exit(0 if ok else 1)
+" || {
     echo "[slurm] CUDA init failed — likely bad node allocation. Exiting so job requeues fast." >&2
     exit 1
 }

@@ -98,7 +98,31 @@ def _iter_batches(dataset, tokenizer, image_token_id, batch_size: int) -> Iterat
             yield batch
 
 
+def _maybe_apply_liger() -> None:
+    """Patch LLaMA with fused/chunked kernels from liger-kernel.
+
+    The fused linear + cross-entropy kernel computes the loss without ever
+    materialising the full (B, T, vocab) logits tensor — the only way to fit
+    LLaMA-2-7B Stage 2 on an 11 GB 2080 Ti. No-op if the package isn't
+    installed so dev environments without it still work.
+    """
+    try:
+        from liger_kernel.transformers import apply_liger_kernel_to_llama
+    except ImportError:
+        print("[stage2] liger-kernel not installed; using stock LLaMA forward")
+        return
+    apply_liger_kernel_to_llama(
+        rope=True,
+        cross_entropy=False,
+        fused_linear_cross_entropy=True,
+        rms_norm=True,
+        swiglu=True,
+    )
+    print("[stage2] liger-kernel applied: fused linear+CE, RoPE, RMSNorm, SwiGLU")
+
+
 def main():
+    _maybe_apply_liger()
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/training_stage2.yaml")
     p.add_argument("--projector-config", default="configs/projector.yaml")
