@@ -56,9 +56,23 @@ class LLaVAInstruct150KDataset:
             preferred = self.root / "llava_instruct_150k.json"
             self.manifest = preferred if preferred.exists() else cands[0]
 
+    def _load_rows(self) -> list[dict]:
+        if not hasattr(self, "_rows"):
+            with self.manifest.open() as f:
+                self._rows = json.load(f)
+        return self._rows
+
+    def __len__(self) -> int:
+        """Number of (image, conversation) items the dataset will yield.
+
+        Loads the manifest once and caches it; the JSON parse is reused by
+        ``__iter__``. Honors ``limit`` if set.
+        """
+        n = len(self._load_rows())
+        return min(int(self.limit), n) if self.limit is not None else n
+
     def __iter__(self) -> Iterator[LLaVAInstructItem]:
-        with self.manifest.open() as f:
-            rows = json.load(f)
+        rows = self._load_rows()
         if self.limit is not None:
             rows = rows[: self.limit]
         for r in rows:

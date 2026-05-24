@@ -21,6 +21,7 @@ import torch
 from rich.console import Console
 
 from ..models.vlm import VLM
+from ..utils import notify
 from .trainer_utils import build_adamw, cosine_with_warmup, freeze_module
 
 console = Console()
@@ -88,8 +89,16 @@ def train_stage2(
 
     opt_cfg = cfg["optimizer"]
     sched_cfg = cfg["schedule"]
-    n_batches = len(dataloader) if hasattr(dataloader, "__len__") else (max_steps or 1000)
-    total_steps = max_steps or (n_batches * sched_cfg["num_epochs"])
+    # Precedence: max_steps (smoke runs) > cfg["total_steps"] (injected by the
+    # launcher when the dataset size is known) > dataloader __len__ > 1000.
+    # Required because the cosine schedule oscillates back up if step > total_steps.
+    if max_steps is not None:
+        total_steps = max_steps
+    elif cfg.get("total_steps") is not None:
+        total_steps = int(cfg["total_steps"])
+    else:
+        n_batches = len(dataloader) if hasattr(dataloader, "__len__") else 1000
+        total_steps = n_batches * sched_cfg["num_epochs"]
     warmup_steps = int(total_steps * sched_cfg["warmup_ratio"])
     optimizer = build_adamw(
         trainable, lr=opt_cfg["lr"], wd=opt_cfg["weight_decay"],
@@ -99,6 +108,7 @@ def train_stage2(
 
     log_every = cfg["logging"]["log_every_steps"]
     save_every = cfg["logging"]["save_every_steps"]
+    notify_every = cfg["logging"].get("notify_every_steps", 0)
     ckpt_path = Path(cfg["output"]["checkpoint_path"])
     accum = max(1, int(cfg["batch"].get("gradient_accumulation_steps", 1)))
 
@@ -125,10 +135,17 @@ def train_stage2(
                 step += 1
 
                 if step % log_every == 0:
+                    lr_now = scheduler.get_last_lr()[0]
                     console.log(
-                        f"[stage2] epoch={epoch} step={step} "
-                        f"loss={out.loss.item():.4f} lr={scheduler.get_last_lr()[0]:.2e}"
+                        f"[stage2] epoch={epoch} step={step}/{total_steps} "
+                        f"loss={out.loss.item():.4f} lr={lr_now:.2e}"
                     )
+                    if notify_every and step % notify_every == 0:
+                        pct = 100 * step / total_steps
+                        notify.send(
+                            f"[Stage2 C1] step {step}/{total_steps} ({pct:.0f}%)\n"
+                            f"loss={out.loss.item():.4f}  lr={lr_now:.2e}"
+                        )
                 if progress_cb is not None:
                     progress_cb(step, float(out.loss.item()))
                 if save_every and step % save_every == 0:

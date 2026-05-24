@@ -5,6 +5,7 @@ CLIP ViT-L/14 frozen, connector refined, LLaMA-2-7B trained via LoRA adapters.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Iterator
 
@@ -16,6 +17,7 @@ from src.models.checkpoint import load_projector
 from src.models.projector import build_projector
 from src.models.vlm import VLM, VLMConfig
 from src.training.stage2_sft import train_stage2
+from src.utils import notify
 from src.utils.io import load_yaml, snapshot_run_metadata
 from src.utils.reproducibility import set_seed
 
@@ -154,11 +156,36 @@ def main():
     )
     if args.subset_size is not None:
         print(f"[stage2] subset: training on first {args.subset_size:,} items")
+
+    # Inject total_steps so the cosine LR schedule spans the actual run length.
+    # Without this, the trainer falls back to 1000 steps and the cosine
+    # oscillates back up once step > 1000. Stage 2 uses gradient accumulation,
+    # so an optimizer step covers (batch_size * accum) items.
+    batch_size = cfg["batch"]["per_device_batch_size"]
+    accum = max(1, int(cfg["batch"].get("gradient_accumulation_steps", 1)))
+    num_epochs = cfg["schedule"]["num_epochs"]
+    n_items = len(dataset)
+    cfg["total_steps"] = math.ceil(n_items / (batch_size * accum)) * num_epochs
+    print(f"[stage2] schedule: total_steps={cfg['total_steps']:,} "
+          f"(items={n_items:,} eff_batch={batch_size * accum} epochs={num_epochs})")
+
     dataloader = _iter_batches(
-        dataset, tokenizer, image_token_id, cfg["batch"]["per_device_batch_size"]
+        dataset, tokenizer, image_token_id, batch_size
     )
 
-    ckpt = train_stage2(vlm, dataloader, cfg, max_steps=args.max_steps)
+    items_label = args.subset_size or "all"
+    device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+    notify.send(
+        f"[Stage2 C1] training started on {device_label}\n"
+        f"items={items_label}  eff_batch={batch_size * accum}  lr={cfg['optimizer']['lr']}\n"
+        f"total_steps={cfg['total_steps']:,}"
+    )
+    try:
+        ckpt = train_stage2(vlm, dataloader, cfg, max_steps=args.max_steps)
+    except Exception as exc:
+        notify.send(f"[Stage2 C1] FAILED: {exc}")
+        raise
+    notify.send(f"[Stage2 C1] training complete — checkpoint saved to {ckpt}")
     snapshot_run_metadata({"stage2": cfg, "args": vars(args)}, Path(cfg["output"]["log_dir"]))
     print(f"[ok] Stage 2 VLM checkpoint: {ckpt}")
 
