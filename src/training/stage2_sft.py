@@ -74,6 +74,18 @@ def train_stage2(
             p.requires_grad = True
         vlm.projector.train()
 
+    # Gradient checkpointing on the base LLM: trades ~30% step-time for ~40%
+    # activation-memory savings. Required to fit LLaMA-2-7B + 257 visual tokens
+    # + bf16 grads on an 11 GB 2080 Ti. Must be enabled before peft wraps the
+    # model so the checkpointed forward propagates to LoRA adapters.
+    if hasattr(vlm._llm, "gradient_checkpointing_enable"):
+        vlm._llm.gradient_checkpointing_enable()
+        # bnb 4-bit base weights have requires_grad=False; without this hook
+        # the activation graph is detached and LoRA adapters get no gradient.
+        if hasattr(vlm._llm, "enable_input_require_grads"):
+            vlm._llm.enable_input_require_grads()
+        console.log("[stage2] gradient checkpointing enabled on base LLM")
+
     lora_cfg = cfg.get("lora") or {}
     if lora_cfg.get("enabled", True):
         vlm = _apply_lora(vlm, lora_cfg)
