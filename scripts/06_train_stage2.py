@@ -140,6 +140,11 @@ def main():
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None,
                    help="train on only the first N LLaVA items (pilot runs)")
+    p.add_argument("--resume", default=None,
+                   help="path to a stage-2 checkpoint to resume training from")
+    p.add_argument("--output-name", default=None,
+                   help="override the checkpoint filename (e.g. stage2_vlm_C1.pt); "
+                        "use to keep C1 and C3 outputs in separate files")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
@@ -151,6 +156,11 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     cfg["device"] = device
+
+    if args.output_name:
+        out_dir = Path(cfg["output"]["checkpoint_path"]).parent
+        cfg["output"]["checkpoint_path"] = str(out_dir / args.output_name)
+        print(f"[stage2] checkpoint output overridden to {cfg['output']['checkpoint_path']}")
 
     # Encoder (frozen CLIP ViT-L/14).
     encoder = build_clip_encoder(enc_cfg).load()
@@ -212,7 +222,11 @@ def main():
         f"total_steps={cfg['total_steps']:,}"
     )
     try:
-        ckpt = train_stage2(vlm, dataloader, cfg, max_steps=args.max_steps)
+        ckpt = train_stage2(
+            vlm, dataloader, cfg,
+            max_steps=args.max_steps,
+            resume_from=Path(args.resume) if args.resume else None,
+        )
     except Exception as exc:
         notify.send(f"[Stage2 C1] FAILED: {exc}")
         raise

@@ -53,6 +53,7 @@ def train_stage2(
     *,
     max_steps: Optional[int] = None,
     progress_cb: Optional[Callable[[int, float], None]] = None,
+    resume_from: Optional[Path] = None,
 ) -> Path:
     """LoRA Stage 2 training loop.
 
@@ -143,13 +144,58 @@ def train_stage2(
     ckpt_path = Path(cfg["output"]["checkpoint_path"])
     accum = max(1, int(cfg["batch"].get("gradient_accumulation_steps", 1)))
 
-    step = 0
+    start_step, start_epoch, full_resume = 0, 0, False
+    if resume_from is not None:
+        blob = torch.load(str(resume_from), map_location="cpu")
+        vlm.projector.load_state_dict(blob["connector"])
+        own = dict(vlm._llm.named_parameters())
+        missing = []
+        with torch.no_grad():
+            for n, tensor in blob.get("llm_trainable", {}).items():
+                if n in own:
+                    own[n].data.copy_(tensor.to(own[n].device, dtype=own[n].dtype))
+                else:
+                    missing.append(n)
+        if missing:
+            console.log(f"[stage2] resume: {len(missing)} LoRA tensors not in model "
+                        f"(first={missing[0]})")
+        if "optimizer" in blob and "scheduler" in blob:
+            optimizer.load_state_dict(blob["optimizer"])
+            scheduler.load_state_dict(blob["scheduler"])
+            start_step = int(blob.get("step", 0))
+            start_epoch = int(blob.get("epoch", 0))
+            full_resume = True
+            rng = blob.get("rng")
+            if rng:
+                try:
+                    torch.set_rng_state(rng["torch"])
+                    if rng.get("cuda") is not None and torch.cuda.is_available():
+                        torch.cuda.set_rng_state_all(rng["cuda"])
+                except Exception as exc:
+                    console.log(f"[stage2] resume: could not restore RNG ({exc})")
+            console.log(f"[stage2] resumed full state from {resume_from} "
+                        f"at epoch={start_epoch} step={start_step}/{total_steps}")
+        else:
+            console.log(f"[stage2] resume: weights-only checkpoint loaded from {resume_from}; "
+                        "optimizer/scheduler/step restart from zero")
+
+    step = start_step
     done = False
-    for epoch in range(sched_cfg["num_epochs"]):
+    micro_to_skip = (start_step * accum) if full_resume and start_step > 0 else 0
+    for epoch in range(start_epoch, sched_cfg["num_epochs"]):
         if done:
             break
         optimizer.zero_grad(set_to_none=True)
+        skipped = 0
+        if micro_to_skip:
+            console.log(f"[stage2] resume: skipping {micro_to_skip} micro-batches "
+                        "to align dataloader with resumed step")
         for micro_idx, batch in enumerate(dataloader):
+            if skipped < micro_to_skip:
+                skipped += 1
+                if skipped % 200 == 0:
+                    console.log(f"[stage2] resume: skipped {skipped}/{micro_to_skip}")
+                continue
             with torch.amp.autocast("cuda", dtype=dtype_amp, enabled=torch.cuda.is_available()):
                 out = vlm(
                     batch["images"],
@@ -180,23 +226,47 @@ def train_stage2(
                 if progress_cb is not None:
                     progress_cb(step, float(out.loss.item()))
                 if save_every and step % save_every == 0:
-                    _save_vlm(vlm, ckpt_path)
+                    _save_vlm(vlm, ckpt_path, optimizer=optimizer,
+                              scheduler=scheduler, step=step, epoch=epoch)
                 if max_steps is not None and step >= max_steps:
                     done = True
                     break
+        # Skip only applies to the first resumed epoch.
+        micro_to_skip = 0
 
-    _save_vlm(vlm, ckpt_path)
+    _save_vlm(vlm, ckpt_path, optimizer=optimizer, scheduler=scheduler,
+              step=step, epoch=epoch)
     return ckpt_path
 
 
-def _save_vlm(vlm: VLM, path: Path) -> None:
+def _save_vlm(
+    vlm: VLM,
+    path: Path,
+    *,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler=None,
+    step: int = 0,
+    epoch: int = 0,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Store connector weights + LoRA adapters separately; the base LLM is
-    # the upstream HF checkpoint and not duplicated here.
+    # the upstream HF checkpoint and not duplicated here. Optimizer, scheduler,
+    # step, epoch and RNG state are included so a crashed run can resume
+    # without losing Adam moments or the cosine LR phase.
     blob = {
         "connector": vlm.projector.state_dict(),
         "llm_trainable": {
             n: p.detach().cpu() for n, p in vlm._llm.named_parameters() if p.requires_grad
         },
+        "step": int(step),
+        "epoch": int(epoch),
+    }
+    if optimizer is not None:
+        blob["optimizer"] = optimizer.state_dict()
+    if scheduler is not None:
+        blob["scheduler"] = scheduler.state_dict()
+    blob["rng"] = {
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
     torch.save(blob, path)

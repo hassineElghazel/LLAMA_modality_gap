@@ -56,12 +56,12 @@ deepspeed:
   config: configs/deepspeed/zero2.json
 
 logging:
-  log_every_steps: 10
-  # Stage 2 has ~4.7k optimizer steps total (LLaVA-Instruct-150K at eff_batch=32).
-  # Save every 500 steps so a crash at step 4000 doesn't lose all progress.
-  save_every_steps: 500
-  # Telegram cadence: ~24 updates over a 4.7k-step run.
-  notify_every_steps: 200
+  log_every_steps: 1
+  # Save frequently so a crash costs at most save_every_steps × ~2 min, not the
+  # whole run. Checkpoint includes optimizer/scheduler/step/RNG, so resume is
+  # exact via `06_train_stage2.py --resume <ckpt>`.
+  save_every_steps: 50
+  notify_every_steps: 50
 
 output:
   checkpoint_path: outputs/checkpoints/stage2_vlm.pt
