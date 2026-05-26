@@ -40,6 +40,7 @@ def _build_vlm(vlm_checkpoint: str, enc_cfg, proj_cfg, llm_cfg, lora_cfg) -> VLM
         llm_hf_id=llm_cfg["model"]["hf_id"],
         weights_dtype=llm_cfg["dtype"]["weights"],
         device=enc_cfg["inference"]["device"],
+        load_in_4bit=True,
     )).load_llm()
 
     if llm_trainable and lora_cfg:
