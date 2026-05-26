@@ -110,6 +110,10 @@ class VLM(nn.Module):
         with torch.no_grad():
             vis_tokens = self.encoder.encode_image_tokens(images)
         proj_tokens = self.projector(vis_tokens.to(next(self.projector.parameters()).dtype))
+        # Match the LLM embedding dtype so the splice below does not upcast the
+        # whole sequence to fp32 (which would mismatch lm_head's half precision
+        # during generate, where there is no autocast).
+        proj_tokens = proj_tokens.to(embed_layer.weight.dtype)
         n_vis = proj_tokens.shape[1]
 
         B, _ = input_ids.shape
