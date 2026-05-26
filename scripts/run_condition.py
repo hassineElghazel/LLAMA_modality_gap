@@ -69,29 +69,32 @@ def _downstream(condition_tag: str, vlm_ckpt: str, dry: bool, skip_benchmarks: b
               "--condition", condition_tag, "--vlm-checkpoint", vlm_ckpt], dry)
 
 
-def run_c0(dry: bool, stage_extra: list[str]) -> None:
+def run_c0(dry: bool, stage_extra: list[str], skip_downstream: bool = False) -> None:
     # Stage args unused (C0 trains nothing) but accepted for dispatch parity.
-    del stage_extra
+    del stage_extra, skip_downstream
     _measure("C0_random", connector_override="random", dry=dry)
 
 
-def run_c1(dry: bool, stage_extra: list[str]) -> None:
+def run_c1(dry: bool, stage_extra: list[str], skip_downstream: bool = False) -> None:
     out_ckpt = "outputs/checkpoints/stage2_vlm_C1.pt"
     _stage2(init_connector="random", out_ckpt=out_ckpt, dry=dry, extra=stage_extra)
     _measure("C1_stage2", connector_override=out_ckpt, dry=dry)
-    _downstream("C1_stage2", vlm_ckpt=out_ckpt, dry=dry, skip_benchmarks=False)
+    if not skip_downstream:
+        _downstream("C1_stage2", vlm_ckpt=out_ckpt, dry=dry, skip_benchmarks=False)
 
 
-def run_c2(dry: bool, stage_extra: list[str]) -> None:
+def run_c2(dry: bool, stage_extra: list[str], skip_downstream: bool = False) -> None:
     out_ckpt = "outputs/checkpoints/stage1_connector_C2.pt"
     _stage1(out_ckpt=out_ckpt, dry=dry, extra=stage_extra)
     _measure("C2_stage1", connector_override=out_ckpt, dry=dry)
     # No Stage 2 -> downstream uses random LoRA path through frozen LLaMA;
     # captioning is "zero-shot through Stage-1 connector + base LLaMA-2".
-    _downstream("C2_stage1", vlm_ckpt=out_ckpt, dry=dry, skip_benchmarks=False)
+    if not skip_downstream:
+        _downstream("C2_stage1", vlm_ckpt=out_ckpt, dry=dry, skip_benchmarks=False)
 
 
-def run_c3(dry: bool, stage_extra: list[str], from_connector: str | None = None) -> None:
+def run_c3(dry: bool, stage_extra: list[str], from_connector: str | None = None,
+           skip_downstream: bool = False) -> None:
     s1_ckpt = "outputs/checkpoints/stage1_connector_C3.pt"
     s2_ckpt = "outputs/checkpoints/stage2_vlm_C3.pt"
     if from_connector is not None:
@@ -113,7 +116,8 @@ def run_c3(dry: bool, stage_extra: list[str], from_connector: str | None = None)
     _measure("C3_stage1", connector_override=s1_ckpt, dry=dry)
     _stage2(init_connector=s1_ckpt, out_ckpt=s2_ckpt, dry=dry, extra=stage_extra)
     _measure("C3_stage2", connector_override=s2_ckpt, dry=dry)
-    _downstream("C3_stage2", vlm_ckpt=s2_ckpt, dry=dry, skip_benchmarks=False)
+    if not skip_downstream:
+        _downstream("C3_stage2", vlm_ckpt=s2_ckpt, dry=dry, skip_benchmarks=False)
 
 
 DISPATCH = {"C0": run_c0, "C1": run_c1, "C2": run_c2, "C3": run_c3}
@@ -128,13 +132,17 @@ def main():
     p.add_argument("--from-connector", default=None,
                    help="C3 only: reuse this Stage-1 connector instead of training one. "
                         "E.g. outputs/checkpoints/stage1_connector_C2.pt to share C2's.")
+    p.add_argument("--skip-downstream", action="store_true",
+                   help="skip captioning / VLMEvalKit so the job only trains + measures. "
+                        "Use when all conditions' downstream evals will be batched later.")
     args, unknown = p.parse_known_args()
     extra: list[str] = list(unknown)
     if args.max_steps is not None:
         extra += ["--max-steps", str(args.max_steps)]
     if args.from_connector is not None and args.condition != "C3":
         p.error("--from-connector is only valid with --condition C3")
-    kwargs: dict = {"dry": args.dry_run, "stage_extra": extra}
+    kwargs: dict = {"dry": args.dry_run, "stage_extra": extra,
+                    "skip_downstream": args.skip_downstream}
     if args.condition == "C3":
         kwargs["from_connector"] = args.from_connector
     DISPATCH[args.condition](**kwargs)
