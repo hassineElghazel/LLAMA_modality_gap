@@ -91,10 +91,25 @@ def run_c2(dry: bool, stage_extra: list[str]) -> None:
     _downstream("C2_stage1", vlm_ckpt=out_ckpt, dry=dry, skip_benchmarks=False)
 
 
-def run_c3(dry: bool, stage_extra: list[str]) -> None:
+def run_c3(dry: bool, stage_extra: list[str], from_connector: str | None = None) -> None:
     s1_ckpt = "outputs/checkpoints/stage1_connector_C3.pt"
     s2_ckpt = "outputs/checkpoints/stage2_vlm_C3.pt"
-    _stage1(out_ckpt=s1_ckpt, dry=dry, extra=stage_extra)
+    if from_connector is not None:
+        # 2x2 factorial design: C2 and C3 share the same Stage-1 connector.
+        # Symlink the existing checkpoint into C3's filename so the rest of
+        # the pipeline (measure, Stage 2, downstream) stays unchanged.
+        src = (REPO_ROOT / from_connector).resolve()
+        dst = REPO_ROOT / s1_ckpt
+        print(f"[run] reuse Stage-1 connector: {dst} -> {src}")
+        if not dry:
+            if not src.exists():
+                raise FileNotFoundError(f"--from-connector source not found: {src}")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            dst.symlink_to(src)
+    else:
+        _stage1(out_ckpt=s1_ckpt, dry=dry, extra=stage_extra)
     _measure("C3_stage1", connector_override=s1_ckpt, dry=dry)
     _stage2(init_connector=s1_ckpt, out_ckpt=s2_ckpt, dry=dry, extra=stage_extra)
     _measure("C3_stage2", connector_override=s2_ckpt, dry=dry)
@@ -110,11 +125,19 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="print commands without running")
     p.add_argument("--max-steps", type=int, default=None,
                    help="forwarded to Stage 1/2 trainers for smoke runs")
+    p.add_argument("--from-connector", default=None,
+                   help="C3 only: reuse this Stage-1 connector instead of training one. "
+                        "E.g. outputs/checkpoints/stage1_connector_C2.pt to share C2's.")
     args, unknown = p.parse_known_args()
     extra: list[str] = list(unknown)
     if args.max_steps is not None:
         extra += ["--max-steps", str(args.max_steps)]
-    DISPATCH[args.condition](dry=args.dry_run, stage_extra=extra)
+    if args.from_connector is not None and args.condition != "C3":
+        p.error("--from-connector is only valid with --condition C3")
+    kwargs: dict = {"dry": args.dry_run, "stage_extra": extra}
+    if args.condition == "C3":
+        kwargs["from_connector"] = args.from_connector
+    DISPATCH[args.condition](**kwargs)
     print(f"[ok] condition {args.condition} complete")
 
 
