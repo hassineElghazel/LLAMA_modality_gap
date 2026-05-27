@@ -78,10 +78,17 @@ class LlamaConnectorVLM:
                 connector.load_state_dict(blob["connector"])
                 connector = connector.to(self.device)
 
+        # Match Stage-2 training precision: LoRA adapters were trained on top of
+        # a 4-bit NF4 base LLM, so inference must load the base the same way for
+        # the adapter→base composition to match what was optimized. C0/C2 paths
+        # have no LoRA, but we still load 4-bit to keep the LLM identical across
+        # the four conditions (only the connector / LoRA changes).
+        quant_cfg = llm_cfg.get("quantization", {})
         self.vlm = VLM(encoder, connector, VLMConfig(
             llm_hf_id=llm_cfg["model"]["hf_id"],
             weights_dtype=llm_cfg["dtype"]["weights"],
             device=self.device,
+            load_in_4bit=bool(quant_cfg.get("load_in_4bit", False)),
         )).load_llm()
 
         # If checkpoint contains LoRA params, wrap and load them.
