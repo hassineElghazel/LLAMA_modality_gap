@@ -5,7 +5,8 @@ Spec §"Downstream Performance" benchmarks:
     Complex Reasoning  : MMMU_DEV_VAL, MMMU_Pro, VisuLogic, LogicVista
     Hallucination      : CRPE, POPE, HallusionBench
 
-Evaluated for C1, C2, C3 (C0 has no trained LLM and is skipped).
+Evaluated for all four conditions including C0 (random connector, no LoRA) as
+the no-training baseline; pass ``--vlm-checkpoint random`` for C0.
 
 Usage:
     python scripts/10_run_vlmevalkit.py --condition C3_stage2 \
