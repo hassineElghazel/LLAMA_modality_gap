@@ -1,23 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=mllm-cap
+#SBATCH --job-name=mllm-cap-c2c3
 #SBATCH --partition=RTX
 #SBATCH --gpus=2080ti:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
-#SBATCH --time=12:00:00
+#SBATCH --time=10:00:00
 #SBATCH --no-requeue
 #SBATCH --output=outputs/logs/cap_%j.out
 #SBATCH --error=outputs/logs/cap_%j.err
 
-# COCO val2017 captioning + pycocoevalcap scoring for ALL FOUR conditions
-# (C0_random, C1_stage2, C2_stage1, C3_stage2) in one job.
-#
-# Idempotent: 08_run_captioning.py reloads any existing captions_<cond>.json and
-# only generates the missing image_ids, so re-running this job is safe.
-#
-# --no-requeue: explicit guard against SLURM auto-restart that silently
-# overwrote a finished C3 checkpoint earlier in this project.
+# Resume run: C0 and C1 already complete. This job runs C2 (resumes from
+# caption #89) and C3 (full 5000-image run). Expected wall-clock: ~8h20m.
 
 set -Eeuo pipefail
 
@@ -54,7 +48,6 @@ trap 'on_error ${LINENO}' ERR
 cd ~/LLAMA_modality_gap
 mkdir -p outputs/logs outputs/predictions outputs/metrics
 
-# --- GPU sanity check ---
 echo "[slurm] node=$(hostname) CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 nvidia-smi --query-gpu=index,name,memory.free --format=csv || echo "[slurm] nvidia-smi failed"
 python -c "
@@ -64,9 +57,7 @@ print(f'[torch] cuda_available={torch.cuda.is_available()} device_count={torch.c
 sys.exit(0 if ok else 1)
 " || { echo "[slurm] CUDA init failed" >&2; exit 1; }
 
-# --- Preflight: required checkpoints exist ---
 for f in \
-    outputs/checkpoints/stage2_vlm_C1.pt \
     outputs/checkpoints/stage1_connector_C2.pt \
     outputs/checkpoints/stage2_vlm_C3.pt; do
     if [[ ! -e "$f" ]]; then
@@ -76,15 +67,9 @@ for f in \
 done
 echo "[preflight] all required checkpoints present"
 
-tg_notify "🚀 *captioning eval started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
-Conditions: C0_random, C1_stage2, C2_stage1, C3_stage2
+tg_notify "🚀 *captioning eval (C2+C3 resume)* started (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
+Conditions: C2_stage1 (resume from #89), C3_stage2 (full run)
 Eval set: COCO val2017 (5000 images)"
-
-# --- Per-condition captioning + scoring ---
-# Each call streams predictions to outputs/predictions/captions_<cond>.json with
-# resume support; scoring writes outputs/metrics/captioning_<cond>.json.
-# SPICE skipped (--no-spice) to avoid the SPICE Java jar; CIDEr / BLEU / METEOR
-# already cover what the thesis needs.
 
 run_cond() {
     local cond="$1"
@@ -100,7 +85,6 @@ run_cond() {
 
     python scripts/09_score_captions.py --condition "$cond" --no-spice
 
-    # Tiny progress ping with the headline scores from the json we just wrote.
     local score_json="outputs/metrics/captioning_${cond}.json"
     if [[ -f "$score_json" ]]; then
         local summary
@@ -116,15 +100,11 @@ print(' '.join(f\"{k}={s[k]:.4f}\" for k in keys if k in s))
     fi
 }
 
-# Order: C0 (cheapest sanity) → C1 → C2 → C3. Same LLM is hot-loaded across all
-# four (only the connector / LoRA changes); HF cache is reused.
-run_cond C0_random   random
-run_cond C1_stage2   outputs/checkpoints/stage2_vlm_C1.pt
 run_cond C2_stage1   outputs/checkpoints/stage1_connector_C2.pt
 run_cond C3_stage2   outputs/checkpoints/stage2_vlm_C3.pt
 
 unset CURRENT_COND
-tg_notify "🎉 *captioning eval complete* (job \`${SLURM_JOB_ID}\`)
-All 4 conditions scored. Files: \`outputs/metrics/captioning_C{0,1,2,3}_*.json\`"
+tg_notify "🎉 *captioning eval (C2+C3) complete* (job \`${SLURM_JOB_ID}\`)
+Files: \`outputs/metrics/captioning_C2_stage1.json\`, \`outputs/metrics/captioning_C3_stage2.json\`"
 
-echo "[slurm] all four conditions complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "[slurm] C2+C3 complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
