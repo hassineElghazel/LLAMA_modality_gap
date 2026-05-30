@@ -111,27 +111,47 @@ def _cos_rows(a: torch.Tensor, b: torch.Tensor) -> np.ndarray:
     return (an * bn).sum(dim=1).numpy()
 
 
-def _per_image_geometry(img: torch.Tensor, txt: torch.Tensor, q: int) -> dict[str, np.ndarray]:
+def _cos_to_vec(a: torch.Tensor, v: torch.Tensor) -> np.ndarray:
+    an = a / a.norm(dim=1, keepdim=True).clamp(min=1e-12)
+    vn = v / v.norm().clamp(min=1e-12)
+    return (an @ vn).numpy()
+
+
+def _per_image_geometry(img: torch.Tensor, txt: torch.Tensor,
+                        q_primary: int, q_sweep: list[int]) -> tuple[dict, dict]:
+    """Returns (features, subspace_energy_by_q).
+
+    features:
+        align_raw            : cos(z_img, z_txt)
+        align_centered       : cos(z_img-mu_img, z_txt-mu_txt)
+        subspace_energy      : energy fraction of (z_img-mu_img) in the text cloud's
+                               top-q_primary principal subspace
+        cos_to_text_centroid : cos(z_img, mu_txt)  -- per-image G_mu-direction analogue,
+                               not dominated by norm (replaces the old norm-collinear feature)
+    subspace_energy_by_q:  {q: energy-fraction array} for the q-sweep diagnostic.
+    """
     mu_img = img.mean(dim=0, keepdim=True)
     mu_txt = txt.mean(dim=0, keepdim=True)
     img_c = img - mu_img
     txt_c = txt - mu_txt
 
-    # text cloud's top-q principal subspace (right singular vectors of centered text)
-    q = min(q, txt_c.shape[1], txt_c.shape[0])
-    _, _, Vh = torch.linalg.svd(txt_c, full_matrices=False)
-    Vq = Vh[:q].T                                   # (D, q)
-    proj = img_c @ Vq                               # (N, q)
+    # one SVD of the centered text cloud; energy at any q is the first-q coeffs.
+    _, _, Vh = torch.linalg.svd(txt_c, full_matrices=False)   # Vh: (D, D)
+    proj_full = img_c @ Vh.T                                   # (N, D) coeffs on text PCs
     img_c_energy = (img_c ** 2).sum(dim=1).clamp(min=1e-12)
-    subspace_energy = ((proj ** 2).sum(dim=1) / img_c_energy).numpy()
 
-    return {
+    def se(q: int) -> np.ndarray:
+        q = min(q, proj_full.shape[1])
+        return ((proj_full[:, :q] ** 2).sum(dim=1) / img_c_energy).numpy()
+
+    features = {
         "align_raw": _cos_rows(img, txt),
         "align_centered": _cos_rows(img_c, txt_c),
-        "subspace_energy": subspace_energy,
-        "dist_to_text_centroid": (img - mu_txt).norm(dim=1).numpy(),
-        "img_norm": img.norm(dim=1).numpy(),
+        "subspace_energy": se(q_primary),
+        "cos_to_text_centroid": _cos_to_vec(img, mu_txt.squeeze(0)),
     }
+    sweep = {int(q): se(int(q)) for q in q_sweep}
+    return features, sweep
 
 
 # ---------------------------------------------------------------------------
@@ -189,11 +209,11 @@ def _clipscores(ids, path_by_id, cap_by_id, clip_id, device, batch_size=64) -> d
 
 
 # ---------------------------------------------------------------------------
-GEOM_FEATURES = ["align_raw", "align_centered", "subspace_energy",
-                 "dist_to_text_centroid", "img_norm"]
+GEOM_FEATURES = ["align_raw", "align_centered", "subspace_energy", "cos_to_text_centroid"]
 # features entered into the multivariate model (raw alignment excluded: it is the
-# gap-confounded one whose sign flips under centering).
-REGRESSION_FEATURES = ["align_centered", "subspace_energy", "dist_to_text_centroid", "img_norm"]
+# gap-confounded one whose sign flips under centering). img_norm dropped — it was
+# collinear with the old dist_to_text_centroid; replaced by cos_to_text_centroid.
+REGRESSION_FEATURES = ["align_centered", "subspace_energy", "cos_to_text_centroid"]
 
 
 def main():
@@ -206,7 +226,9 @@ def main():
     p.add_argument("--out-dir", default="outputs/metrics")
     p.add_argument("--fig-dir", default="outputs/figures/linkage")
     p.add_argument("--subspace-q", type=int, default=64,
-                   help="rank of the text principal subspace for subspace_energy")
+                   help="rank of the text principal subspace for the subspace_energy feature")
+    p.add_argument("--subspace-q-sweep", type=int, nargs="*", default=[16, 32, 64, 128],
+                   help="extra q values to report subspace_energy-vs-target correlations for")
     p.add_argument("--no-cider", action="store_true")
     p.add_argument("--clipscore", action="store_true")
     args = p.parse_args()
@@ -229,9 +251,12 @@ def main():
                          f"manifest={len(row_image_ids)}")
 
     # --- 3. per-image geometry -----------------------------------------------
-    geom = _per_image_geometry(img, txt, q=args.subspace_q)
+    geom, sweep = _per_image_geometry(img, txt, q_primary=args.subspace_q,
+                                      q_sweep=args.subspace_q_sweep)
     geom_by_id = {feat: {iid: float(v) for iid, v in zip(row_image_ids, vals)}
                   for feat, vals in geom.items()}
+    sweep_by_id = {q: {iid: float(v) for iid, v in zip(row_image_ids, vals)}
+                   for q, vals in sweep.items()}
 
     # --- 4. captions ----------------------------------------------------------
     pred_path = Path(cap_cfg["output"]["predictions_dir"]) / f"captions_{args.condition}.json"
@@ -291,6 +316,15 @@ def main():
         fm = {f: feats[f][m] for f in REGRESSION_FEATURES}
         multivariate[tname] = _ols_r2(fm, REGRESSION_FEATURES, tv[m])
 
+    # --- 8b. q-sweep: subspace_energy(q) vs each target ----------------------
+    q_sweep = {}
+    for q in sorted(sweep_by_id):
+        se_q = np.array([sweep_by_id[q][r["image_id"]] for r in rows], dtype=np.float64)
+        q_sweep[str(q)] = {}
+        for tname, tv in targets.items():
+            m = ~np.isnan(tv)
+            q_sweep[str(q)][tname] = _corr(se_q[m], tv[m])
+
     summary = {
         "condition": args.condition,
         "n_joined": len(rows),
@@ -298,6 +332,7 @@ def main():
         "feature_means": {f: float(feats[f].mean()) for f in GEOM_FEATURES},
         "univariate": univariate,
         "multivariate": multivariate,
+        "subspace_q_sweep": q_sweep,
     }
     if args.clipscore:
         summary["clipscore_mean"] = float(np.nanmean(targets["clipscore"]))
@@ -320,7 +355,7 @@ def main():
         target_name = "clipscore" if args.clipscore else "comp_ratio"
         tv = targets[target_name]
         m = ~np.isnan(tv)
-        plot_feats = ["align_centered", "subspace_energy", "dist_to_text_centroid"]
+        plot_feats = ["align_centered", "subspace_energy", "cos_to_text_centroid"]
         fig, axes = plt.subplots(1, len(plot_feats), figsize=(6 * len(plot_feats), 5), squeeze=False)
         for ax, f in zip(axes[0], plot_feats):
             ax.scatter(feats[f][m], tv[m], s=6, alpha=0.3)
