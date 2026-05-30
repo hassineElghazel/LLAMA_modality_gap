@@ -96,16 +96,20 @@ run_link() {
     line=$(python -c "
 import json
 d = json.load(open('${j}'))['summary']
-c = d.get('correlations', {})
-def g(k):
-    r = c.get(k, {})
-    return f\"P={r.get('pearson', float('nan')):.3f} S={r.get('spearman', float('nan')):.3f}\"
-cs = d.get('clipscore_mean')
+uni = d.get('univariate', {})
+mv = d.get('multivariate', {})
+def us(feat, tgt):
+    r = uni.get(feat, {}).get(tgt, {})
+    return f\"{r.get('spearman', float('nan')):.3f}\"
+primary = 'clipscore' if 'clipscore' in mv else 'comp_ratio'
 parts = [f\"n={d['n_joined']}\"]
+cs = d.get('clipscore_mean')
 if cs is not None:
-    parts.append(f\"clipscore_mean={cs:.4f}\")
-    parts.append(f\"align~clip {g('centered_vs_clipscore')}\")
-parts.append(f\"align~comp {g('centered_vs_comp_ratio')}\")
+    parts.append(f\"clip_mean={cs:.3f}\")
+if primary in mv:
+    parts.append(f\"R2({primary})={mv[primary]['r2']:.3f}\")
+parts.append(f\"S[align~{primary}]={us('align_centered', primary)}\")
+parts.append(f\"S[subsp~{primary}]={us('subspace_energy', primary)}\")
 print(' | '.join(parts))
 " 2>/dev/null || echo "parse failed")
     tg_notify "✅ *${cond}* — ${line}"
