@@ -231,7 +231,14 @@ def main():
                    help="extra q values to report subspace_energy-vs-target correlations for")
     p.add_argument("--no-cider", action="store_true")
     p.add_argument("--clipscore", action="store_true")
+    p.add_argument("--device", default="auto",
+                   help="device for CLIPScore: 'auto' (cuda if available else cpu), 'cuda', or 'cpu'")
     args = p.parse_args()
+
+    device = args.device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[device] CLIPScore on {device}")
 
     data_cfg = load_yaml(args.data_config)
     cap_cfg = load_yaml(args.captioning_config)
@@ -276,7 +283,7 @@ def main():
         joined = [iid for iid in hyps if iid in geom_by_id["align_raw"] and iid in path_by_id]
         clip_by_id = _clipscores(joined, path_by_id, hyps,
                                  clip_id=enc_cfg["vision_model"]["hf_id"],
-                                 device=enc_cfg["inference"]["device"])
+                                 device=device)
 
     # --- 6. inner-join on image_id -------------------------------------------
     rows = []
