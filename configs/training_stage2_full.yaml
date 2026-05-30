@@ -1,0 +1,71 @@
+# Stage 2 — FULL-EPOCH retrain (C1 & C3), isolated experiment.
+#
+# Identical to configs/training_stage2.yaml except the output paths and save
+# cadence: this writes under outputs/checkpoints/full_epoch/ so the original 9%
+# checkpoints (outputs/checkpoints/stage2_vlm_C{1,3}.pt) are NOT overwritten.
+#
+# Full epoch = num_epochs:1 with no --max-steps; 06_train_stage2.py computes
+# total_steps = ceil(n_items / eff_batch) * num_epochs (~4,929 for LLaVA-150K).
+
+data:
+  dataset: llava_instruct_150k
+  path: data/llava_instruct_150k
+  hf_repo: liuhaotian/LLaVA-Instruct-150K
+
+freeze:
+  vit: true
+  connector: false   # refined
+  llm: true          # base LLM frozen; only LoRA adapters train
+
+# Connector init. C1 overrides to "random" on the CLI; C3 points at the Stage-1
+# checkpoint via --init-connector. This default is unused when --init-connector
+# is passed (the sbatch always passes it).
+init_from:
+  connector_checkpoint: outputs/checkpoints/stage1_connector.pt
+
+lora:
+  enabled: true
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, o_proj]
+  bias: none
+
+optimizer:
+  name: adamw
+  lr: 2.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+schedule:
+  warmup_ratio: 0.03
+  type: cosine
+  num_epochs: 1      # one epoch = full epoch (~4,929 optimizer steps)
+
+batch:
+  # RTX 2080 Ti (11 GB): B=4 + accum=8 -> eff. batch 32.
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 8
+
+precision:
+  amp: bf16
+
+deepspeed:
+  enabled: false
+  config: configs/deepspeed/zero2.json
+
+logging:
+  log_every_steps: 1
+  # RTX ~2.2 min/step -> save every 25 steps ~= every 55 min, so a crash costs
+  # at most ~55 min of compute. Checkpoint carries optimizer/scheduler/step/RNG,
+  # so resume is exact via `06_train_stage2.py --resume <ckpt>`.
+  save_every_steps: 25
+  notify_every_steps: 50
+
+output:
+  # New experiment directory — keeps the original 9%-epoch checkpoints intact.
+  checkpoint_path: outputs/checkpoints/full_epoch/stage2_vlm.pt
+  log_dir: outputs/logs/stage2_full
+
+seed: 42

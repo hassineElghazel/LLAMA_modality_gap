@@ -14,6 +14,7 @@ positions when expanding the ``<image>`` placeholder.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -146,7 +147,18 @@ def train_stage2(
 
     start_step, start_epoch, full_resume = 0, 0, False
     if resume_from is not None:
-        blob = torch.load(str(resume_from), map_location="cpu")
+        # Atomic saves guarantee the main file is never half-written, but fall
+        # back to the rotated .bak if the main checkpoint is somehow unreadable
+        # (e.g. truncated by a filesystem/node failure outside our save path).
+        try:
+            blob = torch.load(str(resume_from), map_location="cpu")
+        except Exception as exc:  # noqa: BLE001
+            bak = Path(str(resume_from) + ".bak")
+            if not bak.exists():
+                raise
+            console.log(f"[stage2] resume: {resume_from} unreadable ({exc}); "
+                        f"falling back to {bak}")
+            blob = torch.load(str(bak), map_location="cpu")
         vlm.projector.load_state_dict(blob["connector"])
         own = dict(vlm._llm.named_parameters())
         missing = []
@@ -269,4 +281,13 @@ def _save_vlm(
         "torch": torch.get_rng_state(),
         "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
-    torch.save(blob, path)
+    # Atomic save: write to a temp file, rotate the previous checkpoint to .bak,
+    # then atomically replace. Guarantees ``path`` is never a half-written file
+    # if the job is killed mid-save (the failure window that would otherwise
+    # corrupt the only resume point), and keeps one prior checkpoint as a
+    # fallback (see the resume block's .bak handling).
+    tmp = Path(str(path) + ".tmp")
+    torch.save(blob, tmp)
+    if path.exists():
+        os.replace(path, Path(str(path) + ".bak"))
+    os.replace(tmp, path)
