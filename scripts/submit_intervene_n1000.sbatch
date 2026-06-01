@@ -10,13 +10,15 @@
 #SBATCH --output=outputs/logs/intervene_n1000_%j.out
 #SBATCH --error=outputs/logs/intervene_n1000_%j.err
 
-# Confirmation run: N=1000, beta {1.0, 1.5} only — tighten the one soft spot
-# from the N=200 sweep (beta=1.5 was +0.003 over beta=1.0, ~1 SE = noise).
-# At N=1000 the standard error drops to ~0.0013, resolving whether energy-down
-# gives any real gain. Isolated dirs (probe_n1000) — nothing existing touched.
+# Confirmation run: N=1000, beta=1.5 ONLY — tighten the one soft spot from the
+# N=200 sweep (beta=1.5 was +0.003 over beta=1.0, ~1 SE = noise).
 #
-#   beta=1.0 -> control (must match C3)
-#   beta=1.5 -> energy slightly DOWN (residual amplified)
+# beta=1.0 is the identity transform, so it just reproduces the original C3
+# captions (captions_C3_stage2.json), whose per-image CLIPScore is already on
+# disk in outputs/metrics/linkage_C3_stage2.json. So we do NOT re-caption it —
+# we only generate beta=1.5 here, then compare against the beta=1.0 baseline
+# pulled from the linkage table on the SAME 1000 image ids (see the printed
+# command at the end). At N=1000 the SE drops to ~0.0013.
 
 set -Eeuo pipefail
 
@@ -76,16 +78,33 @@ done
 echo "[preflight] inputs present"
 
 tg_notify "🚀 *intervene-n1000* started (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
-N=1000, β∈{1.0,1.5} — confirm whether energy-down gives a real gain (SE≈0.0013).
+N=1000, β=1.5 only (β=1.0 baseline reused from linkage table). SE≈0.0013.
 Isolated outputs under \`outputs/*/probe_n1000/\`."
 
 python scripts/12_intervene_subspace.py \
     --subset-size 1000 \
-    --betas 1.0 1.5 \
+    --betas 1.5 \
     --pred-dir outputs/predictions/probe_n1000 \
     --metrics-dir outputs/metrics/probe_n1000 \
     --fig-dir outputs/figures/probe_n1000
 
+# --- beta=1.0 baseline on the SAME 1000 ids, free, from the linkage table ---
+echo "[probe-n1000] beta=1.5 vs beta=1.0 baseline (same 1000 images):"
+python - <<'PYEOF'
+import json
+b15 = json.load(open("outputs/predictions/probe_n1000/captions_C3_beta1.50.json"))
+ids = {int(r["image_id"]) for r in b15}
+link = json.load(open("outputs/metrics/linkage_C3_stage2.json"))["rows"]
+cs = [r["clipscore"] for r in link
+      if int(r["image_id"]) in ids and r.get("clipscore") is not None]
+b15_cs = json.load(open("outputs/metrics/probe_n1000/clipscore_vs_beta.json"))["results"]["beta1.50"]["clipscore_mean"]
+base = sum(cs) / len(cs) if cs else float("nan")
+print(f"  beta=1.0 (C3 identity, from linkage) CLIPScore = {base:.4f}  (n={len(cs)})")
+print(f"  beta=1.5 (energy down)               CLIPScore = {b15_cs:.4f}")
+print(f"  delta (1.5 - 1.0) = {b15_cs - base:+.4f}   (SE~0.0013; >~0.003 = real gain)")
+PYEOF
+
 tg_notify "✅ *intervene-n1000 COMPLETE* (job \`${SLURM_JOB_ID}\`)
-Results: \`outputs/metrics/probe_n1000/clipscore_vs_beta.json\`"
+β=1.5: \`outputs/metrics/probe_n1000/clipscore_vs_beta.json\`
+β=1.0 baseline reused from linkage; delta printed in the log."
 echo "[slurm] intervene-n1000 complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
