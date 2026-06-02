@@ -1,0 +1,47 @@
+# Early-fusion modality-gap diagnostic on Chameleon-7B.
+#
+# Contrast experiment for the thesis: the LLaVA pipeline (CLIP -> connector ->
+# LLaMA) is LATE fusion, where the gap is a single value at the connector output.
+# Chameleon is EARLY fusion -- image + text tokens share one embedding table and
+# one 32-layer transformer from layer 0 -- so the gap becomes a TRAJECTORY across
+# the 33 representation depths (embedding output + 32 layers).
+#
+# Fully isolated: reads only COCO + the diagnostic manifest (+ the C3 metrics file
+# for the late-fusion overlay, read-only). Writes only under outputs/*/chameleon/.
+
+model:
+  hf_id: facebook/chameleon-7b   # gated: accept the license + set HF_TOKEN first
+  load_in_4bit: true             # ~4 GB weights; fits the 16 GB RTX dev GPU
+  hidden_size: 4096              # asserted against the loaded config
+  num_hidden_layers: 32          # -> 33 hidden states (embeddings + 32 layers)
+
+eval_set:
+  name: coco_val2017
+  annotations_json: data/coco/annotations/captions_val2017.json
+  image_root: data/coco/val2017
+  # Same seed-42 single-caption-per-image sample as every LLaVA gap measurement.
+  manifest_path: outputs/diagnostics_manifest.json
+  seed: 42
+
+run:
+  # Two measurement modes (per design decision -- run both in one job):
+  #   independent : image-only and caption-only in SEPARATE forwards (comparable
+  #                 to the LLaVA single point, which embeds the modalities apart).
+  #   fused       : image AND caption in ONE sequence (true early fusion; the
+  #                 hidden states reflect cross-modal attention).
+  modes: [independent, fused]
+  subset_size: 500
+  batch_size: 4
+  # subspace-overlap ladder; reuses metrics.DEFAULT_Q_LADDER values <= d.
+  q_ladder: [1, 4, 16, 64, 128, 256, 512]
+  knn_k: 20
+
+# Late-fusion reference overlaid on every trajectory panel (read-only).
+overlay_reference: metrics/gap_C3_stage2.json
+
+output:
+  embeddings_dir: outputs/embeddings/chameleon
+  metrics_dir: outputs/metrics/chameleon
+  figures_dir: outputs/figures/chameleon
+
+seed: 42
