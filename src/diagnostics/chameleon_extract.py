@@ -121,6 +121,10 @@ def extract_trajectory(
                 images=images, text=[IMAGE_PLACEHOLDER] * len(images),
                 return_tensors="pt", padding=True,
             ).to(device)
+            # processor returns float32 pixel_values; the VQ encoder convs are in
+            # the model's (bf16) dtype, so cast to avoid a conv dtype mismatch.
+            if "pixel_values" in img_in:
+                img_in["pixel_values"] = img_in["pixel_values"].to(model.dtype)
             img_out = model(**img_in, output_hidden_states=True, use_cache=False)
             image_mask, _ = _image_text_masks(
                 img_in["input_ids"], img_in["attention_mask"], image_token_id, special_ids)
@@ -147,6 +151,8 @@ def extract_trajectory(
             fused_in = processor(
                 images=images, text=text, return_tensors="pt", padding=True,
             ).to(device)
+            if "pixel_values" in fused_in:
+                fused_in["pixel_values"] = fused_in["pixel_values"].to(model.dtype)
             out = model(**fused_in, output_hidden_states=True, use_cache=False)
             image_mask, text_mask = _image_text_masks(
                 fused_in["input_ids"], fused_in["attention_mask"], image_token_id, special_ids)
