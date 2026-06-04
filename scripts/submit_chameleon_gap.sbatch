@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
 #SBATCH --time=06:00:00
-#SBATCH --no-requeue
+#SBATCH --requeue
 #SBATCH --output=outputs/logs/chameleon_gap_%j.out
 #SBATCH --error=outputs/logs/chameleon_gap_%j.err
 
@@ -28,6 +28,7 @@ source ~/miniforge3/etc/profile.d/conda.sh
 conda activate llama_gap
 export HF_TOKEN=$(cat ~/.cache/huggingface/token)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTHONUNBUFFERED=1   # stream per-layer progress to the log live (no block buffering)
 
 source ~/.telegram_env 2>/dev/null || true
 
