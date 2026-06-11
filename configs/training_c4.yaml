@@ -1,0 +1,74 @@
+# C4: joint autoregressive + contrastive Stage-2 training.
+#
+# Identical to training_stage2.yaml on the AR side (so lambda=0 == C3), plus a
+# contrastive term on (image, COCO-train2017 caption) pairs. The connector is
+# initialized from C2's Stage-1 checkpoint; the lambda sweep and the Kendall
+# reference run are selected on the command line (scripts/14_train_c4_joint.py).
+
+data:
+  dataset: llava_instruct_150k
+  path: data/llava_instruct_150k
+  hf_repo: liuhaotian/LLaVA-Instruct-150K
+
+freeze:
+  vit: true
+  connector: false   # refined (trainable), as in Stage 2
+  llm: true          # base LLM frozen; only LoRA adapters train
+
+# Connector initialized from C2's contrastive Stage-1 connector (matches how C3
+# is built — see scripts/run_condition.py). lambda=0 then reproduces C3 exactly.
+init_from:
+  connector_checkpoint: outputs/checkpoints/stage1_connector_C2.pt
+
+# Contrastive term (Stage-1 InfoNCE, reused verbatim: CLS image side, mean-pool
+# text side, learnable temperature). Target text is the COCO train2017 caption.
+contrastive:
+  batch_size: 64                 # 63 in-batch negatives, as in Stage 1
+  lambda: 0.1                    # default; overridden by --lambda on the sweep
+  use_kendall: false             # overridden by --kendall for the reference run
+  temperature_init: 0.07
+  max_caption_length: 64
+  # Extract once from data/coco/annotations_trainval2017.zip:
+  #   unzip -j data/coco/annotations_trainval2017.zip \
+  #     annotations/captions_train2017.json -d data/coco/annotations/
+  caption_annotations: data/coco/annotations/captions_train2017.json
+
+lora:
+  enabled: true
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, o_proj]
+  bias: none
+
+optimizer:
+  name: adamw
+  lr: 2.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+schedule:
+  warmup_ratio: 0.03
+  type: cosine
+  num_epochs: 1
+
+batch:
+  # Same as Stage 2: B=4 + accum=8 -> eff. batch 32 (AR side).
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 8
+
+precision:
+  amp: bf16
+
+logging:
+  log_every_steps: 1
+  save_every_steps: 50
+  notify_every_steps: 50
+
+output:
+  # Per-run filename is set with --output-name (e.g. stage2_vlm_C4_lam0p1.pt).
+  checkpoint_path: outputs/checkpoints/stage2_vlm_C4.pt
+  log_dir: outputs/logs/c4
+
+seed: 42

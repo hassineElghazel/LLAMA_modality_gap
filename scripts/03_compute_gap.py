@@ -17,7 +17,8 @@ from src.diagnostics.metrics import compute_all_metrics
 from src.utils.io import save_json
 
 
-CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2")
+CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
+              "C4_lam0p1", "C4_lam0p5", "C4_kendall")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:
