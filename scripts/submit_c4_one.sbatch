@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
-#SBATCH --time=12:00:00
+#SBATCH --time=30:00:00
 #SBATCH --no-requeue
 #SBATCH --output=outputs/logs/c4_%x_%j.out
 #SBATCH --error=outputs/logs/c4_%x_%j.err
@@ -93,6 +93,14 @@ if [ ! -f "$CAP_JSON" ]; then
 fi
 test -f "$CAP_JSON" || { echo "[c4] FATAL: $CAP_JSON missing" >&2; exit 1; }
 
+# --- Optional resume: set RESUME=<checkpoint> to continue an interrupted run ---
+RESUME_FLAGS=()
+if [ -n "${RESUME:-}" ]; then
+    test -f "$RESUME" || { echo "[c4] FATAL: RESUME=$RESUME not found" >&2; exit 1; }
+    RESUME_FLAGS=(--resume "$RESUME")
+    echo "[c4] resuming from $RESUME"
+fi
+
 tg_notify "🚀 *C4 ${TAG} started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Joint AR+contrastive, init from C2 connector, 450 steps.
 Flags: \`${TRAIN_FLAGS[*]}\`"
@@ -100,7 +108,7 @@ Flags: \`${TRAIN_FLAGS[*]}\`"
 # --- train (450 steps) -> extract -> gap -> caption -> score ---
 tg_notify "C4 ${TAG}: training (${TRAIN_FLAGS[*]})"
 python scripts/14_train_c4_joint.py "${TRAIN_FLAGS[@]}" \
-    --output-name "${CKNAME}" --max-steps 450
+    --output-name "${CKNAME}" --max-steps 450 "${RESUME_FLAGS[@]}"
 
 tg_notify "C4 ${TAG}: extract + gap"
 python scripts/07_extract_projected.py --condition "${TAG}" --connector-override "${CKPT}"
