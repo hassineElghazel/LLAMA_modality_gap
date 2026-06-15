@@ -57,7 +57,7 @@ def main():
         preds = json.load(f)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = CLIPModel.from_pretrained(args.clip_model).to(device).eval()
+    model = CLIPModel.from_pretrained(args.clip_model, use_safetensors=True).to(device).eval()
     proc = CLIPProcessor.from_pretrained(args.clip_model)
     max_len = proc.tokenizer.model_max_length
 
