@@ -39,7 +39,10 @@ CONDITIONS = {
     # C4 (joint AR+contrastive). Connector lives in the stage-2 VLM blob; pass
     # --connector-override to point at the exact per-run checkpoint.
     "C4_lam0p1":  {"connector": "outputs/checkpoints/stage2_vlm_C4_lam0p1.pt",  "uses_stage2": True},
+    "C4_lam0p3":  {"connector": "outputs/checkpoints/stage2_vlm_C4_lam0p3.pt",  "uses_stage2": True},
     "C4_lam0p5":  {"connector": "outputs/checkpoints/stage2_vlm_C4_lam0p5.pt",  "uses_stage2": True},
+    "C4_lam0p7":  {"connector": "outputs/checkpoints/stage2_vlm_C4_lam0p7.pt",  "uses_stage2": True},
+    "C4_lam0p9":  {"connector": "outputs/checkpoints/stage2_vlm_C4_lam0p9.pt",  "uses_stage2": True},
     "C4_kendall": {"connector": "outputs/checkpoints/stage2_vlm_C4_kendall.pt", "uses_stage2": True},
 }
 
