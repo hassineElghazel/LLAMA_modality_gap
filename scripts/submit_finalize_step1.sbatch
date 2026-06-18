@@ -79,18 +79,15 @@ CKDIR=outputs/checkpoints
 EMB=outputs/embeddings
 PRED=outputs/predictions
 
-# --- Preflight: every checkpoint we will read must exist ---
-for f in \
-    ${CKDIR}/stage2_vlm_C3.pt \
-    ${CKDIR}/stage2_vlm_C4_lam0p1.pt \
-    ${CKDIR}/stage2_vlm_C4_lam0p3.pt \
-    ${CKDIR}/stage2_vlm_C4_lam0p5.pt \
-    ${CKDIR}/stage2_vlm_C4_lam0p7.pt \
-    ${CKDIR}/stage2_vlm_C4_lam0p9.pt; do
-    [[ -e "$f" ]] || { echo "[preflight] missing checkpoint: $f" >&2; \
-        tg_notify "❌ *finalize-step1* missing checkpoint \`$f\` (is lambda 0.3 done?)"; exit 1; }
-done
-echo "[preflight] all checkpoints present"
+# --- Preflight: lambda 0.9 checkpoint is the core of this job and must exist.
+#     Other conditions are scored only if their checkpoint is present, so this
+#     job can run BEFORE lambda 0.3 has been (re)trained — it just skips it. ---
+if [ ! -e ${CKDIR}/stage2_vlm_C4_lam0p9.pt ]; then
+    echo "[preflight] missing required ${CKDIR}/stage2_vlm_C4_lam0p9.pt" >&2
+    tg_notify "❌ *finalize-step1* missing λ0.9 checkpoint."
+    exit 1
+fi
+echo "[preflight] lambda 0.9 checkpoint present; others scored only if their checkpoint exists"
 
 tg_notify "🚀 *finalize-step1* started (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 λ0.9 geometry + captions, then SPICE scoring for C3 + all C4 λ."
@@ -110,6 +107,11 @@ fi
 # --- 2)+3) ensure captions, then SPICE-inclusive scoring, per condition ---
 score_one() {
     local cond="$1"; local ckpt="$2"
+    if [ ! -e "$ckpt" ]; then
+        echo "[finalize] SKIP ${cond}: checkpoint not present yet (${ckpt})"
+        tg_notify "⏭️ skip *${cond}* — no checkpoint yet (train it separately)"
+        return 0
+    fi
     export CURRENT_COND="$cond"
     # 08 is resumable: it skips already-captioned image_ids and no-ops when a
     # condition is complete, so calling it unconditionally also finishes any
