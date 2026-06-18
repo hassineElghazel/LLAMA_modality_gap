@@ -6,24 +6,42 @@ which one is the functional lever. This probe *manipulates one component at a
 time* on a trained model, at inference, with NO retraining, and re-measures
 captioning. Whichever intervention moves grounding is the causal component.
 
-Three isolated interventions on the projected image tokens ``z`` (plus an
-identity control), built read-only from the chosen condition's saved pooled
-embeddings (image cloud mu_x,U_x,lam_x ; text cloud mu_y,U_y,lam_y), restricted
-to the top-q principal subspace (full 4096-d covariance is rank-deficient):
+Interventions on the projected image tokens ``z`` (plus controls), built
+read-only from the chosen condition's saved pooled embeddings (image cloud
+mu_x,U_x,lam_x ; text cloud mu_y,U_y,lam_y), restricted (for the subspace ones)
+to the top-q principal subspace (full 4096-d covariance is rank-deficient). Each
+is dosed by ``alpha`` in [0,1] (0 = identity, 1 = full), so we trace a
+dose-RESPONSE curve rather than a single on/off point (Liang et al. 2022,
+"Mind the Gap", move_features):
 
-    identity   : z' = z                                  (control — must match base)
-    mean_shift : z' = z + (mu_y - mu_x)                  (DISTANCE: G_mu -> ~0)
-    rotate     : z' = mu_x + U_y (U_x^T z_c) + resid      (ORIENTATION: axes -> text)
-    recolor    : z' = mu_x + U_x diag(sqrt(lam_y/lam_x)) U_x^T z_c + resid  (SHAPE)
+    identity     : z' = z                                       (control — must match base)
+    mean_shift   : z' = z + alpha (mu_y - mu_x)                 (DISTANCE: G_mu -> ~0)
+    rotate       : z' = mu_x + [(1-a) in_sub + a (coords U_y^T)] + resid  (ORIENTATION)
+    recolor      : z' = mu_x + U_x diag((sqrt(lam_y/lam_x))^a) U_x^T z_c + resid  (SHAPE)
+    realign      : z' = (mu_x + a(mu_y-mu_x)) + (sqrt(tr_y/tr_x))^a (z - mu_x)  (FULL close, ReAlign)
+    random_shift : z' = z + alpha r,  ||r|| = ||mu_y - mu_x||   (NULL: norm-matched OOD control)
 
-  z_c = z - mu_x ;  resid = z_c - U_x U_x^T z_c  (off-subspace part, kept fixed)
+  z_c = z - mu_x ;  coords = z_c U_x ;  in_sub = coords U_x^T ;  resid = z_c - in_sub
 
-Each intervention is a single affine map applied identically to every token, so
-the pooled geometry the connector emits is exactly that map applied to the saved
-pooled image cloud. We therefore VERIFY isolation cheaply on CPU: apply the same
-map to the pooled embeddings and re-run ``compute_all_metrics`` — confirming the
-intended metric moved and the others held — then measure FUNCTION via CLIPScore
-(reference-free, immune to the verbose-vs-terse mismatch that floors CIDEr).
+``random_shift`` is the crucial control: a directed gap-closing shift and a
+random shift of the SAME magnitude are both equally off-distribution for the
+frozen decoder, so any decoder effect ABOVE the random null is the part
+attributable to the geometry, not to generic OOD fragility.
+
+TWO readouts, because the single (decoder) readout was the weakness of the
+earlier probe:
+  - DECODER-FREE (immune to the OOD confound): image->text retrieval R@K +
+    mean paired cosine on the pooled clouds after the map (Liang-style; no LLM).
+  - DECODER (function-level): CLIPScore on the generated captions. Pass a non-
+    circular CLIP via --clip-model (e.g. ~/clip_b32) so it is not the same tower
+    as the vision encoder.
+The CONTRAST between the two is the result: alignment that moves the decoder-free
+readout but not CLIPScore localises the gap as decoder-bound, not representational.
+
+Cost-aware grids: the decoder-free readout + geometry verification run on a FINE
+alpha grid (cheap, CPU, no generation); captioning + CLIPScore run on a COARSE
+alpha grid (expensive). Each map is also VERIFIED on CPU via compute_all_metrics
+(intended component moved, others held).
 
 ISOLATION: reads only the chosen checkpoint + that condition's saved pooled
 embeddings + COCO; writes ONLY under outputs/{predictions,metrics,figures}/intervene/.
@@ -31,7 +49,8 @@ embeddings + COCO; writes ONLY under outputs/{predictions,metrics,figures}/inter
 Usage:
     python scripts/16_intervene_geometry.py \
         --vlm-checkpoint outputs/checkpoints/stage2_vlm_C4_lam0p1.pt \
-        --emb-condition C4_lam0p1 --subset-size 300
+        --emb-condition C4_lam0p1 --subset-size 300 \
+        --clip-model "$HOME/clip_b32"
 """
 from __future__ import annotations
 
@@ -53,14 +72,16 @@ from src.utils.io import load_yaml
 from src.utils.reproducibility import set_seed
 
 
-INTERVENTIONS = ("identity", "mean_shift", "rotate", "recolor")
+INTERVENTIONS = ("identity", "mean_shift", "rotate", "recolor", "realign", "random_shift")
 
 # Geometric component each intervention is designed to move (for the report).
 TARGET_OF = {
-    "identity":   "none (control)",
-    "mean_shift": "distance (G_mu)",
-    "rotate":     "orientation (subspace_overlap)",
-    "recolor":    "shape (trace / eff_rank)",
+    "identity":     "none (control)",
+    "mean_shift":   "distance (G_mu)",
+    "rotate":       "orientation (subspace_overlap)",
+    "recolor":      "shape (trace / eff_rank)",
+    "realign":      "full close: distance + scale (ReAlign)",
+    "random_shift": "none (norm-matched OOD null control)",
 }
 
 
@@ -120,46 +141,87 @@ def build_geometry(emb_dir: Path, condition: str, q: int):
     Uy = Vhy[:q].t().contiguous()           # (D, q) text principal axes
     lam_x = (sx[:q] ** 2) / max(n - 1, 1)   # image eigenvalue spectrum (top q)
     lam_y = (sy[:q] ** 2) / max(n - 1, 1)   # text  eigenvalue spectrum (top q)
+    trace_x = (xc ** 2).sum() / max(n - 1, 1)   # total covariance trace (image)
+    trace_y = (yc ** 2).sum() / max(n - 1, 1)   # total covariance trace (text)
+
+    # Norm-matched random control direction: deterministic (own seed), magnitude
+    # exactly ||mu_y - mu_x|| so random_shift and mean_shift are equal-size moves.
+    rng = torch.Generator().manual_seed(0)
+    r = torch.randn(img.shape[1], generator=rng)
+    r = r / r.norm().clamp(min=1e-12) * (mu_y - mu_x).norm()
     return {
         "mu_x": mu_x, "mu_y": mu_y, "Ux": Ux, "Uy": Uy,
         "lam_x": lam_x, "lam_y": lam_y, "q": q,
+        "trace_x": trace_x, "trace_y": trace_y, "rand_shift": r,
         "img_pooled": img, "txt_pooled": txt,
     }
 
 
-def apply_geom(z: torch.Tensor, kind: str, g: dict) -> torch.Tensor:
-    """Apply one intervention to a (..., D) tensor. Pure / linear / per-token."""
-    if kind == "identity":
+def apply_geom(z: torch.Tensor, kind: str, g: dict, alpha: float = 1.0) -> torch.Tensor:
+    """Apply one intervention to a (..., D) tensor at dose ``alpha`` (0=identity,
+    1=full). Pure / linear / per-token; alpha interpolates from identity so the
+    map traces a dose-response curve."""
+    if kind == "identity" or alpha == 0.0:
         return z
-    mu_x, mu_y, Ux, Uy = g["mu_x"], g["mu_y"], g["Ux"], g["Uy"]
+    mu_x, mu_y = g["mu_x"], g["mu_y"]
     if kind == "mean_shift":
-        return z + (mu_y - mu_x)
+        return z + alpha * (mu_y - mu_x)
+    if kind == "random_shift":
+        return z + alpha * g["rand_shift"]
+    if kind == "realign":
+        # ReAlign full close: anchor (mean -> text) + trace (global scale -> text).
+        s = torch.sqrt(g["trace_y"] / g["trace_x"].clamp(min=1e-12)) ** alpha
+        mean_a = mu_x + alpha * (mu_y - mu_x)
+        return mean_a + s * (z - mu_x)
 
+    Ux, Uy = g["Ux"], g["Uy"]
     zc = z - mu_x
     coords = zc @ Ux                         # (..., q) coords on image axes
     in_sub = coords @ Ux.t()                 # in-image-subspace component
     resid = zc - in_sub                      # off-subspace residual (kept fixed)
     if kind == "rotate":
-        return mu_x + (coords @ Uy.t()) + resid
+        rotated = (1.0 - alpha) * in_sub + alpha * (coords @ Uy.t())
+        return mu_x + rotated + resid
     if kind == "recolor":
-        scale = torch.sqrt(g["lam_y"] / g["lam_x"].clamp(min=1e-8))
+        scale = torch.sqrt(g["lam_y"] / g["lam_x"].clamp(min=1e-8)) ** alpha
         return mu_x + ((coords * scale) @ Ux.t()) + resid
     raise ValueError(f"unknown intervention: {kind}")
 
 
 class GeometryProjector(nn.Module):
-    """Wraps a trained projector; applies ``kind`` to its output before splice."""
+    """Wraps a trained projector; applies ``kind`` at dose ``alpha`` to its output
+    before splice."""
 
-    def __init__(self, base: nn.Module, kind: str, g_dev: dict):
+    def __init__(self, base: nn.Module, kind: str, g_dev: dict, alpha: float = 1.0):
         super().__init__()
         self.base = base
         self.kind = kind
         self.g = g_dev
+        self.alpha = float(alpha)
 
     def forward(self, x):
         z = self.base(x)
         dt = z.dtype
-        return apply_geom(z.float(), self.kind, self.g).to(dt)
+        return apply_geom(z.float(), self.kind, self.g, self.alpha).to(dt)
+
+
+@torch.no_grad()
+def inspace_retrieval(X: torch.Tensor, Y: torch.Tensor, ks=(1, 5, 10)) -> dict:
+    """DECODER-FREE alignment readout (Liang et al. style): image->text retrieval
+    and mean paired cosine on the pooled clouds, AFTER the intervention. Row i of
+    X is paired with row i of Y. No LLM involved, so this readout is immune to the
+    off-distribution decoder confound that makes the CLIPScore readout ambiguous."""
+    Xn = torch.nn.functional.normalize(X.float(), dim=-1)
+    Yn = torch.nn.functional.normalize(Y.float(), dim=-1)
+    sim = Xn @ Yn.t()                        # (N, N) cosine
+    n = sim.shape[0]
+    idx = torch.arange(n)
+    out = {"paired_cos_mean": float(sim[idx, idx].mean()), "n": n}
+    order = sim.argsort(dim=-1, descending=True)
+    for k in ks:
+        hit = (order[:, : min(k, n)] == idx.unsqueeze(1)).any(dim=1).float().mean()
+        out[f"R@{k}"] = float(hit)
+    return out
 
 
 @torch.no_grad()
@@ -190,10 +252,11 @@ def clipscores(ids, path_by_id, cap_by_id, clip_id, device, batch_size=64) -> di
     return out
 
 
-def verify_geometry(kind: str, g: dict) -> dict:
-    """Apply the map to the pooled image cloud, re-run compute_all_metrics, and
-    return a compact summary proving which component moved and which held."""
-    Xp = apply_geom(g["img_pooled"], kind, g)
+def verify_geometry(kind: str, g: dict, alpha: float = 1.0) -> dict:
+    """Apply the map (at dose alpha) to the pooled image cloud, re-run
+    compute_all_metrics, and return a compact summary proving which component
+    moved and which held."""
+    Xp = apply_geom(g["img_pooled"], kind, g, alpha)
     m = compute_all_metrics(Xp, g["txt_pooled"]).to_dict()
     spec, extra = m["spec_metrics"], m["extras"]
     return {
@@ -219,9 +282,21 @@ def main():
     p.add_argument("--projector-config", default="configs/projector.yaml")
     p.add_argument("--llm-config", default="configs/llm.yaml")
     p.add_argument("--stage2-config", default="configs/training_stage2.yaml")
-    p.add_argument("--subset-size", type=int, default=300)
+    p.add_argument("--subset-size", type=int, default=300,
+                   help="images captioned per (intervention, caption-dose) — the expensive axis")
     p.add_argument("--subspace-q", type=int, default=64)
     p.add_argument("--interventions", nargs="*", default=list(INTERVENTIONS), choices=INTERVENTIONS)
+    p.add_argument("--caption-doses", type=float, nargs="*", default=[0.5, 1.0],
+                   help="alpha values at which to RUN GENERATION + CLIPScore (expensive, coarse)")
+    p.add_argument("--geom-doses", type=float, nargs="*",
+                   default=[0.25, 0.5, 0.75, 1.0, 1.25, 1.5],
+                   help="alpha values for the decoder-free readout + geometry verify (cheap, fine)")
+    p.add_argument("--retrieval-n", type=int, default=0,
+                   help="pooled pairs used for the decoder-free retrieval readout (0 = all)")
+    p.add_argument("--clip-model", default=None,
+                   help="CLIP model for the CLIPScore readout; pass a NON-circular tower "
+                        "(e.g. $HOME/clip_b32) so it differs from the ViT-L/14 vision encoder. "
+                        "Default falls back to the vision encoder (circular — flagged in output).")
     p.add_argument("--device", default="auto")
     # Isolated output roots — never the canonical predictions/metrics dirs.
     p.add_argument("--pred-dir", default="outputs/predictions/intervene")
@@ -252,20 +327,30 @@ def main():
     print(f"[intervene] subset: {len(items)} images")
 
     # Read-only geometry (CPU master) + a device copy for the projector wrapper.
+    # The big pooled clouds stay on CPU (used only by the cheap readouts).
     g = build_geometry(Path(args.emb_dir), args.emb_condition, args.subspace_q)
     print(f"[intervene] geometry q={g['q']} from condition={args.emb_condition}")
-    g_dev = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in g.items()}
+    g_dev = {k: (v.to(device) if (torch.is_tensor(v) and k not in ("img_pooled", "txt_pooled"))
+                 else v) for k, v in g.items()}
 
-    # Build the VLM once; keep a handle to the base (unwrapped) projector.
-    vlm = build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
-    base_projector = vlm.projector
+    # Decoder-free retrieval cloud (optionally subsample the pooled pairs).
+    Xret, Yret = g["img_pooled"], g["txt_pooled"]
+    if args.retrieval_n and args.retrieval_n < Xret.shape[0]:
+        Xret, Yret = Xret[: args.retrieval_n], Yret[: args.retrieval_n]
 
-    results = {}
-    for kind in args.interventions:
-        print(f"[intervene] === {kind}  (targets {TARGET_OF[kind]}) ===")
-        vlm.projector = GeometryProjector(base_projector, kind, g_dev).to(device)
+    clip_model_id = args.clip_model or enc_cfg["vision_model"]["hf_id"]
+    clip_circular = args.clip_model is None
+    if clip_circular:
+        print("[intervene] WARNING: CLIPScore tower == vision encoder (CIRCULAR). "
+              "Pass --clip-model $HOME/clip_b32 for a non-circular readout.")
 
-        out_path = pred_dir / f"captions_{args.emb_condition}_{kind}.json"
+    non_identity = [k for k in args.interventions if k != "identity"]
+
+    def caption_clipscore(kind: str, alpha: float) -> dict:
+        """Expensive leg: wrap projector at (kind, alpha), generate, CLIPScore."""
+        vlm.projector = GeometryProjector(base_projector, kind, g_dev, alpha).to(device)
+        tag = f"{kind}_a{alpha:g}"
+        out_path = pred_dir / f"captions_{args.emb_condition}_{tag}.json"
         run_captioning(
             vlm, items,
             prompt_template=cap_cfg["prompt"]["user"],
@@ -275,16 +360,57 @@ def main():
         )
         with out_path.open() as f:
             caps = {int(r["image_id"]): r["caption"] for r in json.load(f)}
-
         ids = [iid for iid in caps if iid in path_by_id]
-        cs = clipscores(ids, path_by_id, caps, clip_id=enc_cfg["vision_model"]["hf_id"], device=device)
-        cs_mean = float(sum(cs.values()) / max(len(cs), 1))
-        geom = verify_geometry(kind, g)               # CPU, cheap
-        results[kind] = {"target": TARGET_OF[kind], "clipscore_mean": cs_mean,
-                         "n": len(ids), "geometry": geom}
-        print(f"[intervene] {kind}: clipscore_mean={cs_mean:.4f} "
-              f"G_mu={geom['G_mu']:.3f} O64={geom['subspace_overlap_q64']:.4f} "
-              f"eff_rank={geom['eff_rank_image']:.2f} n={len(ids)}")
+        cs = clipscores(ids, path_by_id, caps, clip_id=clip_model_id, device=device)
+        vals = list(cs.values())
+        mean = float(sum(vals) / max(len(vals), 1))
+        std = float((sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5) if len(vals) > 1 else 0.0
+        # Per-image scores retained (ids align across conditions — same subset) so a
+        # PAIRED test (directed vs random, directed vs identity) is computable post-hoc.
+        return {"clipscore_mean": mean, "clipscore_std": std, "n": len(ids),
+                "clipscores": {str(k): float(v) for k, v in cs.items()}}
+
+    # Build the VLM once; keep a handle to the base (unwrapped) projector.
+    vlm = build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
+    base_projector = vlm.projector
+
+    # --- identity baseline (both readouts) ---
+    print("[intervene] === identity (control baseline) ===")
+    identity = {
+        "target": TARGET_OF["identity"],
+        "inspace": inspace_retrieval(Xret, Yret),
+        "geometry": verify_geometry("identity", g),
+        **caption_clipscore("identity", 0.0),
+    }
+    print(f"[intervene] identity: clipscore={identity['clipscore_mean']:.4f} "
+          f"R@1={identity['inspace']['R@1']:.4f} paired_cos={identity['inspace']['paired_cos_mean']:.4f}")
+
+    # --- decoder-free + geometry on the FINE dose grid (cheap, no generation) ---
+    geom_grid = []
+    for kind in non_identity:
+        for a in args.geom_doses:
+            ins = inspace_retrieval(apply_geom(Xret, kind, g, a), Yret)
+            geom = verify_geometry(kind, g, a)
+            geom_grid.append({"kind": kind, "target": TARGET_OF[kind], "alpha": a,
+                              "inspace": ins, "geometry": geom})
+            print(f"[geom] {kind} a={a:g}: R@1={ins['R@1']:.4f} "
+                  f"paired_cos={ins['paired_cos_mean']:.4f} G_mu={geom['G_mu']:.3f} "
+                  f"O64={geom['subspace_overlap_q64']:.4f}")
+
+    # --- captioning + CLIPScore on the COARSE dose grid (expensive) ---
+    caption_grid = []
+    for kind in non_identity:
+        print(f"[intervene] === {kind}  (targets {TARGET_OF[kind]}) ===")
+        for a in args.caption_doses:
+            cap = caption_clipscore(kind, a)
+            ins = inspace_retrieval(apply_geom(Xret, kind, g, a), Yret)
+            geom = verify_geometry(kind, g, a)
+            rec = {"kind": kind, "target": TARGET_OF[kind], "alpha": a,
+                   "inspace": ins, "geometry": geom, **cap}
+            caption_grid.append(rec)
+            print(f"[intervene] {kind} a={a:g}: clipscore={cap['clipscore_mean']:.4f}"
+                  f"±{cap['clipscore_std']:.4f} R@1={ins['R@1']:.4f} G_mu={geom['G_mu']:.3f} "
+                  f"O64={geom['subspace_overlap_q64']:.4f} n={cap['n']}")
 
     # Restore the base projector (leave the in-RAM model clean).
     vlm.projector = base_projector
@@ -293,34 +419,50 @@ def main():
     with out_json.open("w") as f:
         json.dump({"checkpoint": args.vlm_checkpoint, "emb_condition": args.emb_condition,
                    "subset_size": len(items), "subspace_q": g["q"],
-                   "results": results}, f, indent=2)
+                   "clip_model": clip_model_id, "clip_circular": clip_circular,
+                   "retrieval_n": Xret.shape[0],
+                   "caption_doses": args.caption_doses, "geom_doses": args.geom_doses,
+                   "identity": identity, "geom_grid": geom_grid,
+                   "caption_grid": caption_grid}, f, indent=2)
     print(f"[ok] wrote {out_json}")
 
-    # Plot: CLIPScore per intervention, with the identity control as a reference.
+    # Plot: two panels — decoder-free dose-response (fine) vs decoder CLIPScore (coarse).
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        order = [k for k in INTERVENTIONS if k in results]
-        cs = [results[k]["clipscore_mean"] for k in order]
-        base = results.get("identity", {}).get("clipscore_mean")
-        fig, ax = plt.subplots(figsize=(7, 5))
-        ax.bar(order, cs, color=["#999", "#4a86e8", "#16a766", "#e07798"][: len(order)])
-        if base is not None:
-            ax.axhline(base, ls="--", c="k", lw=1, label="identity (control)")
-            ax.legend()
-        ax.set_ylabel("CLIPScore (mean)")
-        ax.set_title(f"Captioning vs geometric intervention — {args.emb_condition}")
-        for i, v in enumerate(cs):
-            ax.annotate(f"{v:.3f}", (i, v), ha="center", va="bottom", fontsize=9)
+        colors = {"mean_shift": "#4a86e8", "rotate": "#16a766", "recolor": "#e07798",
+                  "realign": "#e69138", "random_shift": "#999999"}
+        fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+
+        # Panel A: decoder-free R@1 vs dose.
+        ax[0].axhline(identity["inspace"]["R@1"], ls="--", c="k", lw=1, label="identity")
+        for kind in non_identity:
+            pts = sorted([r for r in geom_grid if r["kind"] == kind], key=lambda r: r["alpha"])
+            if pts:
+                ax[0].plot([r["alpha"] for r in pts], [r["inspace"]["R@1"] for r in pts],
+                           "o-", color=colors.get(kind, None), label=kind)
+        ax[0].set_xlabel("dose alpha"); ax[0].set_ylabel("image->text R@1")
+        ax[0].set_title("decoder-FREE alignment (OOD-immune)"); ax[0].legend(fontsize=8)
+
+        # Panel B: decoder CLIPScore vs dose.
+        ax[1].axhline(identity["clipscore_mean"], ls="--", c="k", lw=1, label="identity")
+        for kind in non_identity:
+            pts = sorted([r for r in caption_grid if r["kind"] == kind], key=lambda r: r["alpha"])
+            if pts:
+                ax[1].plot([r["alpha"] for r in pts], [r["clipscore_mean"] for r in pts],
+                           "s-", color=colors.get(kind, None), label=kind)
+        ax[1].set_xlabel("dose alpha"); ax[1].set_ylabel("CLIPScore (mean)")
+        circ = " [CIRCULAR]" if clip_circular else ""
+        ax[1].set_title(f"decoder function{circ}"); ax[1].legend(fontsize=8)
+
+        fig.suptitle(f"Geometric interventions — {args.emb_condition}")
         fig.tight_layout()
         fig_path = fig_dir / f"intervene_{args.emb_condition}.png"
         fig.savefig(fig_path, dpi=150)
         print(f"[ok] wrote {fig_path}")
     except Exception as e:  # noqa: BLE001
         print(f"[warn] plot skipped: {type(e).__name__}: {e}")
-
-    print(json.dumps(results, indent=2))
 
 
 if __name__ == "__main__":
