@@ -49,6 +49,7 @@ source ~/miniforge3/etc/profile.d/conda.sh
 conda activate llama_gap
 export HF_TOKEN=$(cat ~/.cache/huggingface/token)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTHONUNBUFFERED=1   # live .out progress (no block-buffering under SLURM)
 
 source ~/.telegram_env 2>/dev/null || true
 

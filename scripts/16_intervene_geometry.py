@@ -40,8 +40,9 @@ readout but not CLIPScore localises the gap as decoder-bound, not representation
 
 Cost-aware grids: the decoder-free readout + geometry verification run on a FINE
 alpha grid (cheap, CPU, no generation); captioning + CLIPScore run on a COARSE
-alpha grid (expensive). Each map is also VERIFIED on CPU via compute_all_metrics
-(intended component moved, others held).
+alpha grid (expensive). Each map is also VERIFIED on CPU by a cheap targeted
+geometry probe (Gram trace + low-rank SVD; see verify_geometry) — intended
+component moved, others held — NOT the full metric suite (too slow over the grid).
 
 ISOLATION: reads only the chosen checkpoint + that condition's saved pooled
 embeddings + COCO; writes ONLY under outputs/{predictions,metrics,figures}/intervene/.
@@ -63,7 +64,6 @@ from torch import nn
 
 from src.captioning.inference import run_captioning
 from src.data.coco_val2017_loader import CocoVal2017Dataset
-from src.diagnostics.metrics import compute_all_metrics
 from src.encoders.clip_encoder import build_clip_encoder
 from src.models.checkpoint import load_projector
 from src.models.projector import build_projector
@@ -252,20 +252,34 @@ def clipscores(ids, path_by_id, cap_by_id, clip_id, device, batch_size=64) -> di
     return out
 
 
+@torch.no_grad()
 def verify_geometry(kind: str, g: dict, alpha: float = 1.0) -> dict:
-    """Apply the map (at dose alpha) to the pooled image cloud, re-run
-    compute_all_metrics, and return a compact summary proving which component
-    moved and which held."""
-    Xp = apply_geom(g["img_pooled"], kind, g, alpha)
-    m = compute_all_metrics(Xp, g["txt_pooled"]).to_dict()
-    spec, extra = m["spec_metrics"], m["extras"]
+    """Targeted geometry check on the GPU: apply the map (at dose alpha) to the
+    pooled image cloud and compute ONLY the metrics the interventions move —
+    G_mu (exact), trace (exact), eff_rank (exact, via the Gram-Frobenius identity),
+    subspace_overlap_q64 (exact, via a full GPU SVD). Deliberately avoids the full
+    compute_all_metrics suite — its numpy 4096x4096 eigendecompositions (kappa) and
+    O(N^2) knn (=0 here) cost ~minutes/call on CPU and, over the grid, hours, while
+    adding no signal for the causal question. Identity reproduces gap_*.json (sanity)."""
+    Xp = apply_geom(g["img_pooled"], kind, g, alpha).float()
+    Y_mu, Uy = g["mu_y"], g["Uy"]
+    n = Xp.shape[0]
+    mu = Xp.mean(0)
+    Xc = Xp - mu
+    trace = float((Xc ** 2).sum() / max(n - 1, 1))                 # tr(Sigma)
+    Gram = Xc @ Xc.t()                                             # (n, n)
+    sigma_sq = float((Gram ** 2).sum() / (max(n - 1, 1) ** 2))     # tr(Sigma^2)
+    eff_rank = float(trace * trace / sigma_sq) if sigma_sq > 0 else float("nan")
+    q = Uy.shape[1]
+    _, _, Vh = torch.linalg.svd(Xc, full_matrices=False)          # exact SVD (fast on GPU)
+    Vx = Vh[:q].t()                                               # (D, q) top image axes
+    M = Vx.t() @ Uy
+    overlap = float((M ** 2).sum() / q)                            # (1/q)||Ux^q.T Uy^q||_F^2
     return {
-        "G_mu": spec["G_mu"],
-        "subspace_overlap_q64": extra["subspace_overlap_q"].get("64"),
-        "eff_rank_image": spec["eff_rank_image"],
-        "trace_image": spec["trace_image"],
-        "knn_mixing_rate_k20": spec["knn_mixing_rate_k20"],
-        "residual_ratio": extra["residual_ratio"],
+        "G_mu": float((mu - Y_mu).norm()),
+        "subspace_overlap_q64": overlap,
+        "eff_rank_image": eff_rank,
+        "trace_image": trace,
     }
 
 
@@ -326,15 +340,16 @@ def main():
     path_by_id = {int(it.image_id): it.image_path for it in items}
     print(f"[intervene] subset: {len(items)} images")
 
-    # Read-only geometry (CPU master) + a device copy for the projector wrapper.
-    # The big pooled clouds stay on CPU (used only by the cheap readouts).
+    # Read-only geometry, moved ENTIRELY to the GPU (incl. the pooled clouds) so
+    # the probe + retrieval run as fast torch ops, not numpy on CPU. The clouds are
+    # ~80 MB each — trivial next to the 4-bit LLM, and the probes run between
+    # captioning passes, so there's no GPU contention.
     g = build_geometry(Path(args.emb_dir), args.emb_condition, args.subspace_q)
     print(f"[intervene] geometry q={g['q']} from condition={args.emb_condition}")
-    g_dev = {k: (v.to(device) if (torch.is_tensor(v) and k not in ("img_pooled", "txt_pooled"))
-                 else v) for k, v in g.items()}
+    g_dev = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in g.items()}
 
-    # Decoder-free retrieval cloud (optionally subsample the pooled pairs).
-    Xret, Yret = g["img_pooled"], g["txt_pooled"]
+    # Decoder-free retrieval cloud on the GPU (optionally subsample the pooled pairs).
+    Xret, Yret = g_dev["img_pooled"], g_dev["txt_pooled"]
     if args.retrieval_n and args.retrieval_n < Xret.shape[0]:
         Xret, Yret = Xret[: args.retrieval_n], Yret[: args.retrieval_n]
 
@@ -379,7 +394,7 @@ def main():
     identity = {
         "target": TARGET_OF["identity"],
         "inspace": inspace_retrieval(Xret, Yret),
-        "geometry": verify_geometry("identity", g),
+        "geometry": verify_geometry("identity", g_dev),
         **caption_clipscore("identity", 0.0),
     }
     print(f"[intervene] identity: clipscore={identity['clipscore_mean']:.4f} "
@@ -389,8 +404,8 @@ def main():
     geom_grid = []
     for kind in non_identity:
         for a in args.geom_doses:
-            ins = inspace_retrieval(apply_geom(Xret, kind, g, a), Yret)
-            geom = verify_geometry(kind, g, a)
+            ins = inspace_retrieval(apply_geom(Xret, kind, g_dev, a), Yret)
+            geom = verify_geometry(kind, g_dev, a)
             geom_grid.append({"kind": kind, "target": TARGET_OF[kind], "alpha": a,
                               "inspace": ins, "geometry": geom})
             print(f"[geom] {kind} a={a:g}: R@1={ins['R@1']:.4f} "
@@ -403,8 +418,8 @@ def main():
         print(f"[intervene] === {kind}  (targets {TARGET_OF[kind]}) ===")
         for a in args.caption_doses:
             cap = caption_clipscore(kind, a)
-            ins = inspace_retrieval(apply_geom(Xret, kind, g, a), Yret)
-            geom = verify_geometry(kind, g, a)
+            ins = inspace_retrieval(apply_geom(Xret, kind, g_dev, a), Yret)
+            geom = verify_geometry(kind, g_dev, a)
             rec = {"kind": kind, "target": TARGET_OF[kind], "alpha": a,
                    "inspace": ins, "geometry": geom, **cap}
             caption_grid.append(rec)
