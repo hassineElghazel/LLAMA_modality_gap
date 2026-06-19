@@ -215,7 +215,7 @@ def inspace_retrieval(X: torch.Tensor, Y: torch.Tensor, ks=(1, 5, 10)) -> dict:
     Yn = torch.nn.functional.normalize(Y.float(), dim=-1)
     sim = Xn @ Yn.t()                        # (N, N) cosine
     n = sim.shape[0]
-    idx = torch.arange(n)
+    idx = torch.arange(n, device=sim.device)
     out = {"paired_cos_mean": float(sim[idx, idx].mean()), "n": n}
     order = sim.argsort(dim=-1, descending=True)
     for k in ks:
