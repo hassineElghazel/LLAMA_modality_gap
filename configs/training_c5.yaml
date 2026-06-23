@@ -1,0 +1,74 @@
+# C5: joint autoregressive + distance Stage-2 training.
+#
+# Identical to training_c4.yaml on the AR side (so lambda_d=0 == C3), with the
+# C4 contrastive (InfoNCE / orientation) term replaced by a batch-mean distance
+# (location) term. The connector is initialized from C2's Stage-1 checkpoint; the
+# lambda_d sweep is selected on the command line (scripts/17_train_c5_distance.py).
+
+data:
+  dataset: llava_instruct_150k
+  path: data/llava_instruct_150k
+  hf_repo: liuhaotian/LLaVA-Instruct-150K
+
+freeze:
+  vit: true
+  connector: false   # refined (trainable), as in Stage 2 / C4
+  llm: true          # base LLM frozen; only LoRA adapters train
+
+# Connector initialized from C2's contrastive Stage-1 connector (matches C3/C4).
+# lambda_d=0 then reproduces C3 exactly.
+init_from:
+  connector_checkpoint: outputs/checkpoints/stage1_connector_C2.pt
+
+# Distance term: closes mean_b(projector(CLS)) onto the frozen text centroid
+# mu_y, normalized by the frozen image-cloud trace_x. No learnable parameters.
+distance:
+  batch_size: 64                 # same image batch size as C4's contrastive leg
+  lambda_d: 0.5                  # default; overridden by --lambda-d on the sweep
+  # Frozen targets, precomputed once from the C3 diagnostic embeddings (the same
+  # ones behind gap_C3_stage2.json):
+  mu_y_source: outputs/embeddings/projected_C3_stage2_text_pooled.pt
+  trace_x_source: outputs/embeddings/projected_C3_stage2_image_pooled.pt
+  trace_x: 4582.0                # fallback scalar if trace_x_source is absent
+  # Carried only to reproduce C4's exact image stream / per-item filtering:
+  caption_annotations: data/coco/annotations/captions_train2017.json
+
+lora:
+  enabled: true
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, o_proj]
+  bias: none
+
+optimizer:
+  name: adamw
+  lr: 2.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+schedule:
+  warmup_ratio: 0.03
+  type: cosine
+  num_epochs: 1
+
+batch:
+  # Same as Stage 2 / C4: B=4 + accum=8 -> eff. batch 32 (AR side).
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 8
+
+precision:
+  amp: bf16
+
+logging:
+  log_every_steps: 1
+  save_every_steps: 50
+  notify_every_steps: 50
+
+output:
+  # Per-run filename is set with --output-name (e.g. stage2_vlm_C5_lam0p5.pt).
+  checkpoint_path: outputs/checkpoints/stage2_vlm_C5.pt
+  log_dir: outputs/logs/c5
+
+seed: 42
