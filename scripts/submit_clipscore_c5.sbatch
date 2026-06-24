@@ -48,8 +48,8 @@ if [ ! -d "$CLIP_MODEL" ]; then
     exit 1
 fi
 
-# C3 + C4_lam0p5 re-run for a consistent three-way; C5_lam0p5 is the new one.
-CONDITIONS=(C3_stage2 C4_lam0p5 C5_lam0p5)
+# Only the new condition; C3/C4 CLIPScores already exist.
+CONDITIONS=(C5_lam0p5)
 
 for c in "${CONDITIONS[@]}"; do
     echo "=== ${c} ==="
