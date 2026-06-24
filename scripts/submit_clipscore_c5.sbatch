@@ -39,6 +39,15 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 echo "[clipscore-c5] GPU:"
 nvidia-smi --query-gpu=index,name,memory.free --format=csv || echo "[clipscore-c5] nvidia-smi failed -> CPU fallback"
 
+# Local CLIP ViT-B/32 dir (same backbone used for the intervention CLIPScores),
+# loaded offline — avoids the hub-conversion call that breaks under HF_HUB_OFFLINE
+# when only a .bin is cached for the HF id.
+CLIP_MODEL="$HOME/clip_b32"
+if [ ! -d "$CLIP_MODEL" ]; then
+    echo "[clipscore-c5] FATAL: local CLIP dir $CLIP_MODEL not found" >&2
+    exit 1
+fi
+
 # C3 + C4_lam0p5 re-run for a consistent three-way; C5_lam0p5 is the new one.
 CONDITIONS=(C3_stage2 C4_lam0p5 C5_lam0p5)
 
@@ -48,7 +57,7 @@ for c in "${CONDITIONS[@]}"; do
         echo "[clipscore-c5] ${c}: predictions file missing, skipping"
         continue
     fi
-    python scripts/15_clipscore.py --condition "${c}" \
+    python scripts/15_clipscore.py --condition "${c}" --clip-model "$CLIP_MODEL" \
         || echo "[clipscore-c5] ${c} FAILED (see traceback above)"
 done
 
