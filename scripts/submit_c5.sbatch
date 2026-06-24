@@ -81,7 +81,7 @@ test -f "$CAP_JSON" || { echo "[c5] FATAL: $CAP_JSON missing" >&2; exit 1; }
 
 tg_notify "🚀 *C5 started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Joint AR+distance (location), init from C2 connector, 450 steps.
-Begin: lambda_d=0.5. lambda_d=0 is C3 (reuse)."
+Running: lambda_d=0.1 (low end of the sweep; 0.5 already done)."
 
 # --- One config: train (450 steps) -> extract -> gap -> caption -> score ---
 # To run another lambda_d as its own job, add/uncomment a run_one line.
@@ -107,15 +107,15 @@ run_one() {
     tg_notify "✅ C5 ${tag} done"
 }
 
-run_one C5_lam0p5  stage2_vlm_C5_lam0p5.pt  --lambda-d 0.5
-# run_one C5_lam0p1  stage2_vlm_C5_lam0p1.pt  --lambda-d 0.1
+# run_one C5_lam0p5  stage2_vlm_C5_lam0p5.pt  --lambda-d 0.5   # done
+run_one C5_lam0p1  stage2_vlm_C5_lam0p1.pt  --lambda-d 0.1
 # run_one C5_lam0p3  stage2_vlm_C5_lam0p3.pt  --lambda-d 0.3
 # run_one C5_lam0p7  stage2_vlm_C5_lam0p7.pt  --lambda-d 0.7
 # run_one C5_lam0p9  stage2_vlm_C5_lam0p9.pt  --lambda-d 0.9
 
 tg_notify "✅ *C5 complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C5_lam0p5.pt\`
-Gap: \`outputs/metrics/gap_C5_lam0p5.json\`  Captions scored.
-Guardrail: confirm trace ~4582, eff_rank ~38.6, O_64 flat vs C3."
+Checkpoint: \`stage2_vlm_C5_lam0p1.pt\`
+Gap: \`outputs/metrics/gap_C5_lam0p1.json\`  Captions scored.
+Compare vs C5_lam0p5: less closing -> less compression? read trace_image + CLIPScore."
 
 echo "[slurm] C5 complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
