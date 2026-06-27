@@ -84,11 +84,14 @@ def train_stage2_distance(
         raise ValueError(f"trace_x must be positive, got {trace_x}")
 
     # C5b scale pin: hold the CLS-cloud spread (btrace) at its baseline btrace0.
+    # btrace0 is FROZEN once set. If not provided, it is AUTO-MEASURED from the
+    # first distance step (where the connector is still C2-init), so it is always
+    # correct for whatever the init/data is — no hardcoded constant.
     use_scale_pin = lambda_s > 0.0
-    if use_scale_pin:
-        if btrace0 is None or float(btrace0) <= 0:
-            raise ValueError(f"lambda_s={lambda_s} needs a positive btrace0, got {btrace0}")
+    if use_scale_pin and btrace0 is not None:
         btrace0 = float(btrace0)
+        if btrace0 <= 0:
+            raise ValueError(f"btrace0 must be positive, got {btrace0}")
 
     # ----- freeze / trainable setup (identical to Stage 2 / C4) -----
     if cfg["freeze"].get("vit", True):
@@ -122,7 +125,11 @@ def train_stage2_distance(
     # (mu_y / trace_x are frozen constants). Trainable set = connector + LoRA.
     trainable = [p for p in vlm.parameters() if p.requires_grad]
     n_trainable = sum(p.numel() for p in trainable)
-    pin_msg = f"  scale-pin lambda_s={lambda_s} btrace0={btrace0:.1f}" if use_scale_pin else ""
+    if use_scale_pin:
+        b0_str = f"{btrace0:.1f}" if btrace0 is not None else "auto@step1"
+        pin_msg = f"  scale-pin lambda_s={lambda_s} btrace0={b0_str}"
+    else:
+        pin_msg = ""
     console.log(
         f"[c5] trainable params: {n_trainable / 1e6:.2f}M  "
         f"(convex lambda_d={lambda_d}, trace_x={trace_x:.1f}){pin_msg}"
@@ -193,6 +200,7 @@ def train_stage2_distance(
             z_img = vlm.projector(cls)                                # (B,4096)
         # Centroid + distance computed in fp32 for an accurate, well-conditioned
         # geometric term (gradient still flows back through z_img / connector).
+        nonlocal btrace0
         zf = z_img.float()
         zbar = zf.mean(dim=0)                                         # (4096,)
         l_dist = ((zbar - mu_y) ** 2).sum() / trace_x
@@ -200,6 +208,11 @@ def train_stage2_distance(
             # grad-enabled batch spread (CLS-cloud trace); pin it to btrace0 so
             # the optimizer must TRANSLATE the cloud, not shrink it.
             btrace = ((zf - zbar) ** 2).sum(dim=1).mean()
+            if btrace0 is None:
+                # first distance step: connector is still C2-init -> this IS the
+                # baseline spread. Freeze it (no hardcoded constant needed).
+                btrace0 = float(btrace.detach())
+                console.log(f"[c5] scale-pin: captured btrace0={btrace0:.1f} (C2-init spread)")
             l_scale = (btrace / btrace0 - 1.0) ** 2
             diag["btrace"] = float(btrace.detach())
         else:

@@ -29,7 +29,8 @@ distance:
   # lambda_s*(btrace/btrace0 - 1)^2 to hold the CLS spread at btrace0, forcing
   # location to close by translation, not magnitude shrink.
   lambda_s: 0.0                  # overridden by --lambda-s; 1.0 for C5b
-  btrace0: 29282.0               # C2-init CLS spread (= step-1 btrace in C5 runs)
+  btrace0: null                  # null = auto-measure at step-1 (C2-init spread);
+                                 # set a number (e.g. 29282) to pin to a fixed value
   # Frozen targets, precomputed once from the C3 diagnostic embeddings (the same
   # ones behind gap_C3_stage2.json):
   mu_y_source: outputs/embeddings/projected_C3_stage2_text_pooled.pt

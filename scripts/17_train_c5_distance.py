@@ -214,11 +214,11 @@ def main():
     trace_x = _resolve_trace_x(d_cfg)
     print(f"[c5] mu_y loaded: shape={tuple(mu_y.shape)} ||mu_y||={float(mu_y.norm()):.4f}")
 
-    pin = f" + scale-pin lambda_s={lambda_s} btrace0={btrace0}" if lambda_s > 0 else ""
+    pin = ""
+    if lambda_s > 0:
+        b0 = f"{float(btrace0):.1f}" if btrace0 is not None else "auto@step1"
+        pin = f" + scale-pin lambda_s={lambda_s} btrace0={b0}"
     mode = f"convex lambda_d={lambda_d}{pin}"
-    if lambda_s > 0 and btrace0 is None:
-        btrace0 = 29282.0  # observed C2-init CLS spread (step-1 btrace in C5 runs)
-        print(f"[c5] lambda_s>0 but no btrace0 given; using default {btrace0}")
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
         f"[C5] training started on {device_label}\n"
