@@ -53,17 +53,25 @@ def train_stage2_distance(
     lambda_d: float,
     mu_y: torch.Tensor,
     trace_x: float,
+    lambda_s: float = 0.0,
+    btrace0: Optional[float] = None,
     max_steps: Optional[int] = None,
     progress_cb: Optional[Callable[[int, float, float], None]] = None,
     resume_from: Optional[Path] = None,
 ) -> Path:
-    """Joint AR + distance Stage-2 loop (C5).
+    """Joint AR + distance Stage-2 loop (C5 / C5b).
 
     ``ar_dataloader`` yields the same batches as Stage 2
     (``{"images", "input_ids", "labels"}``). ``image_iter`` is an *infinite*
     iterator yielding ``{"images": list[PIL], ...}`` of the distance batch size
     (the SAME stream C4's contrastive iterator produces; any caption field is
     ignored). ``mu_y`` is a frozen (4096,) tensor; ``trace_x`` a frozen scalar.
+
+    ``lambda_s`` (default 0) adds the C5b scale-pin term
+    ``L_scale = (btrace / btrace0 - 1)^2`` that holds the CLS-cloud spread at
+    its baseline ``btrace0`` (the C2-init value), forcing the distance term to
+    close location by TRANSLATION rather than by shrinking magnitude. At
+    ``lambda_s=0`` this is byte-identical to C5 (the scale term is never built).
     """
     device = torch.device(cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
     dtype_amp = torch.bfloat16 if cfg["precision"]["amp"] == "bf16" else torch.float32
@@ -74,6 +82,13 @@ def train_stage2_distance(
     trace_x = float(trace_x)
     if trace_x <= 0:
         raise ValueError(f"trace_x must be positive, got {trace_x}")
+
+    # C5b scale pin: hold the CLS-cloud spread (btrace) at its baseline btrace0.
+    use_scale_pin = lambda_s > 0.0
+    if use_scale_pin:
+        if btrace0 is None or float(btrace0) <= 0:
+            raise ValueError(f"lambda_s={lambda_s} needs a positive btrace0, got {btrace0}")
+        btrace0 = float(btrace0)
 
     # ----- freeze / trainable setup (identical to Stage 2 / C4) -----
     if cfg["freeze"].get("vit", True):
@@ -107,9 +122,10 @@ def train_stage2_distance(
     # (mu_y / trace_x are frozen constants). Trainable set = connector + LoRA.
     trainable = [p for p in vlm.parameters() if p.requires_grad]
     n_trainable = sum(p.numel() for p in trainable)
+    pin_msg = f"  scale-pin lambda_s={lambda_s} btrace0={btrace0:.1f}" if use_scale_pin else ""
     console.log(
         f"[c5] trainable params: {n_trainable / 1e6:.2f}M  "
-        f"(convex lambda_d={lambda_d}, trace_x={trace_x:.1f})"
+        f"(convex lambda_d={lambda_d}, trace_x={trace_x:.1f}){pin_msg}"
     )
 
     vlm.train()
@@ -162,11 +178,12 @@ def train_stage2_distance(
 
     diag = {"gap": 0.0, "btrace": 0.0}
 
-    def _distance_step() -> torch.Tensor:
+    def _distance_step():
         """One distance forward on a fresh image batch (no LLaMA body).
 
         Image path (encode -> CLS -> connector) is copied verbatim from C4's
-        ``_contrastive_step``; only the returned loss differs.
+        ``_contrastive_step``. Returns ``(l_dist, l_scale)``; ``l_scale`` is
+        ``None`` unless the C5b scale pin is active (``lambda_s>0``).
         """
         ibatch = next(image_iter)
         with torch.no_grad():
@@ -179,18 +196,26 @@ def train_stage2_distance(
         zf = z_img.float()
         zbar = zf.mean(dim=0)                                         # (4096,)
         l_dist = ((zbar - mu_y) ** 2).sum() / trace_x
-        # Cheap guardrail diagnostics (no extra forward): location gap and the
-        # batch spread, to confirm location closes WITHOUT collapse.
+        if use_scale_pin:
+            # grad-enabled batch spread (CLS-cloud trace); pin it to btrace0 so
+            # the optimizer must TRANSLATE the cloud, not shrink it.
+            btrace = ((zf - zbar) ** 2).sum(dim=1).mean()
+            l_scale = (btrace / btrace0 - 1.0) ** 2
+            diag["btrace"] = float(btrace.detach())
+        else:
+            l_scale = None
+            with torch.no_grad():
+                diag["btrace"] = float(((zf - zbar) ** 2).sum(dim=1).mean())
         with torch.no_grad():
             diag["gap"] = float((zbar - mu_y).norm())
-            diag["btrace"] = float(((zf - zbar) ** 2).sum(dim=1).mean())
-        return l_dist
+        return l_dist, l_scale
 
-    run_distance = lambda_d > 0.0
+    run_distance = lambda_d > 0.0 or use_scale_pin
 
     step = start_step
     done = False
     last_dist = 0.0
+    last_scale = 0.0
     for epoch in range(sched_cfg["num_epochs"]):
         if done:
             break
@@ -206,11 +231,15 @@ def train_stage2_distance(
             (w_ar * out.loss / accum).backward()
 
             if (micro_idx + 1) % accum == 0:
-                # --- distance term: one forward+backward per optimizer step ---
+                # --- distance (+ optional scale-pin) term: one fwd+bwd / step ---
                 if run_distance:
-                    l_dist = _distance_step()
+                    l_dist, l_scale = _distance_step()
                     last_dist = float(l_dist.detach())
-                    (lambda_d * l_dist).backward()
+                    geo = lambda_d * l_dist
+                    if l_scale is not None:
+                        last_scale = float(l_scale.detach())
+                        geo = geo + lambda_s * l_scale
+                    geo.backward()
 
                 optimizer.step()
                 scheduler.step()
@@ -219,9 +248,10 @@ def train_stage2_distance(
 
                 if step % log_every == 0:
                     lr_now = scheduler.get_last_lr()[0]
+                    scale_str = f"L_scale={last_scale:.4f} " if use_scale_pin else ""
                     console.log(
                         f"[c5] epoch={epoch} step={step}/{total_steps} "
-                        f"L_ar={out.loss.item():.4f} L_dist={last_dist:.4f} "
+                        f"L_ar={out.loss.item():.4f} L_dist={last_dist:.4f} {scale_str}"
                         f"lambda_d={lambda_d:.3f} gap={diag['gap']:.4f} "
                         f"btrace={diag['btrace']:.1f} lr={lr_now:.2e}"
                     )
@@ -246,8 +276,10 @@ def train_stage2_distance(
 
     # Sidecar: record the distance-head state so the run is reportable.
     sidecar = {
-        "mode": "distance",
+        "mode": "distance_pinned" if use_scale_pin else "distance",
         "lambda_d": float(lambda_d),
+        "lambda_s": float(lambda_s),
+        "btrace0": btrace0 if use_scale_pin else None,
         "trace_x": trace_x,
         "final_gap": diag["gap"],
         "final_btrace": diag["btrace"],

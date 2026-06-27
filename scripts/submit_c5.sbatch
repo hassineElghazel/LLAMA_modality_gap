@@ -79,9 +79,19 @@ if [ ! -f "$CAP_JSON" ]; then
 fi
 test -f "$CAP_JSON" || { echo "[c5] FATAL: $CAP_JSON missing" >&2; exit 1; }
 
+# --- CLIPScore setup (folded into run_one so it's never skipped) ---
+# Local ViT-B/32 dir, loaded offline (same backbone as the C3/C4/C5 scores).
+CLIP_MODEL="$HOME/clip_b32"
+[ -d "$CLIP_MODEL" ] || echo "[c5] WARN: $CLIP_MODEL missing -> clipscore step will fail (non-fatal)"
+# Idempotent safetensors fix (recent transformers refuses torch.load on .bin
+# unless torch>=2.6); force the .safetensors path.
+grep -q use_safetensors scripts/15_clipscore.py || \
+    sed -i 's/CLIPModel\.from_pretrained(args\.clip_model)/CLIPModel.from_pretrained(args.clip_model, use_safetensors=True)/' \
+        scripts/15_clipscore.py
+
 tg_notify "🚀 *C5 started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
-Joint AR+distance (location), init from C2 connector, 450 steps.
-Running: lambda_d=0.1 (low end of the sweep; 0.5 already done)."
+Joint AR+distance, init from C2 connector, 450 steps.
+Running: C5b_lam0p5 (distance lambda_d=0.5 + scale-pin lambda_s=1.0)."
 
 # --- One config: train (450 steps) -> extract -> gap -> caption -> score ---
 # To run another lambda_d as its own job, add/uncomment a run_one line.
@@ -104,18 +114,25 @@ run_one() {
     python scripts/08_run_captioning.py --condition "${tag}" --vlm-checkpoint "${ckpt}"
     python scripts/09_score_captions.py --condition "${tag}"
 
+    tg_notify "C5 ${tag}: clipscore"
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/15_clipscore.py \
+        --condition "${tag}" --clip-model "$CLIP_MODEL" \
+        || echo "[c5] ${tag} clipscore FAILED (non-fatal; rerun submit_clipscore_c5.sbatch)"
+
     tg_notify "✅ C5 ${tag} done"
 }
 
-# run_one C5_lam0p5  stage2_vlm_C5_lam0p5.pt  --lambda-d 0.5   # done
-run_one C5_lam0p1  stage2_vlm_C5_lam0p1.pt  --lambda-d 0.1
-# run_one C5_lam0p3  stage2_vlm_C5_lam0p3.pt  --lambda-d 0.3
-# run_one C5_lam0p7  stage2_vlm_C5_lam0p7.pt  --lambda-d 0.7
-# run_one C5_lam0p9  stage2_vlm_C5_lam0p9.pt  --lambda-d 0.9
+# C5b: distance lambda_d=0.5 (strong closing, where compression was largest)
+# + scale-pin lambda_s=1.0 to hold the spread -> strong location move, no compress.
+run_one C5b_lam0p5  stage2_vlm_C5b_lam0p5.pt  --lambda-d 0.5 --lambda-s 1.0
+# Done earlier (plain C5, scale pin off):
+# run_one C5_lam0p5  stage2_vlm_C5_lam0p5.pt  --lambda-d 0.5
+# run_one C5_lam0p1  stage2_vlm_C5_lam0p1.pt  --lambda-d 0.1
 
 tg_notify "✅ *C5 complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C5_lam0p1.pt\`
-Gap: \`outputs/metrics/gap_C5_lam0p1.json\`  Captions scored.
-Compare vs C5_lam0p5: less closing -> less compression? read trace_image + CLIPScore."
+Checkpoint: \`stage2_vlm_C5b_lam0p5.pt\`
+Gap: \`outputs/metrics/gap_C5b_lam0p5.json\`  Captions + CLIPScore done.
+Guardrail: btrace should hold ~29282 (vs C5_lam0p5's collapse to ~10k).
+Compare CLIPScore vs C5_lam0p5 (0.579) and C5_lam0p1 (0.585)."
 
 echo "[slurm] C5 complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"

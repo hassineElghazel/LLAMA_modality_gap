@@ -25,6 +25,11 @@ init_from:
 distance:
   batch_size: 64                 # same image batch size as C4's contrastive leg
   lambda_d: 0.5                  # default; overridden by --lambda-d on the sweep
+  # C5b scale pin (off by default -> plain C5). lambda_s>0 adds
+  # lambda_s*(btrace/btrace0 - 1)^2 to hold the CLS spread at btrace0, forcing
+  # location to close by translation, not magnitude shrink.
+  lambda_s: 0.0                  # overridden by --lambda-s; 1.0 for C5b
+  btrace0: 29282.0               # C2-init CLS spread (= step-1 btrace in C5 runs)
   # Frozen targets, precomputed once from the C3 diagnostic embeddings (the same
   # ones behind gap_C3_stage2.json):
   mu_y_source: outputs/embeddings/projected_C3_stage2_text_pooled.pt

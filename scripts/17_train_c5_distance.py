@@ -121,6 +121,11 @@ def main():
                    help="connector checkpoint to init from (default: C2 from config)")
     p.add_argument("--lambda-d", dest="lambda_d", type=float, default=None,
                    help="distance weight in (1-l)L_AR + l*L_dist (overrides config)")
+    p.add_argument("--lambda-s", dest="lambda_s", type=float, default=None,
+                   help="C5b scale-pin weight: + l_s*(btrace/btrace0 - 1)^2 holds the "
+                        "CLS spread at btrace0 (overrides config). 0 = plain C5")
+    p.add_argument("--btrace0", type=float, default=None,
+                   help="C5b baseline CLS spread to pin to (default: config/29282)")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
@@ -142,6 +147,14 @@ def main():
     lambda_d = (
         args.lambda_d if args.lambda_d is not None
         else float(d_cfg.get("lambda_d", 0.5))
+    )
+    lambda_s = (
+        args.lambda_s if args.lambda_s is not None
+        else float(d_cfg.get("lambda_s", 0.0))
+    )
+    btrace0 = (
+        args.btrace0 if args.btrace0 is not None
+        else d_cfg.get("btrace0")  # may be None when scale pin is off
     )
 
     if args.output_name:
@@ -201,7 +214,11 @@ def main():
     trace_x = _resolve_trace_x(d_cfg)
     print(f"[c5] mu_y loaded: shape={tuple(mu_y.shape)} ||mu_y||={float(mu_y.norm()):.4f}")
 
-    mode = f"convex lambda_d={lambda_d}"
+    pin = f" + scale-pin lambda_s={lambda_s} btrace0={btrace0}" if lambda_s > 0 else ""
+    mode = f"convex lambda_d={lambda_d}{pin}"
+    if lambda_s > 0 and btrace0 is None:
+        btrace0 = 29282.0  # observed C2-init CLS spread (step-1 btrace in C5 runs)
+        print(f"[c5] lambda_s>0 but no btrace0 given; using default {btrace0}")
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
         f"[C5] training started on {device_label}\n"
@@ -214,6 +231,8 @@ def main():
             lambda_d=lambda_d,
             mu_y=mu_y,
             trace_x=trace_x,
+            lambda_s=lambda_s,
+            btrace0=float(btrace0) if btrace0 is not None else None,
             max_steps=args.max_steps,
             resume_from=Path(args.resume) if args.resume else None,
         )
@@ -222,7 +241,8 @@ def main():
         raise
     notify.send(f"[C5] training complete ({mode}) — checkpoint {ckpt}")
     snapshot_run_metadata(
-        {"c5": cfg, "args": vars(args), "lambda_d": lambda_d, "trace_x": trace_x},
+        {"c5": cfg, "args": vars(args), "lambda_d": lambda_d,
+         "lambda_s": lambda_s, "btrace0": btrace0, "trace_x": trace_x},
         Path(cfg["output"]["log_dir"]),
     )
     print(f"[ok] C5 VLM checkpoint: {ckpt}")
