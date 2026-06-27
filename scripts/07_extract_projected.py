@@ -53,6 +53,8 @@ CONDITIONS = {
     "C5_lam0p9":  {"connector": "outputs/checkpoints/stage2_vlm_C5_lam0p9.pt",  "uses_stage2": True},
     # C5b: distance + scale-pin (location closed by translation, spread held).
     "C5b_lam0p5": {"connector": "outputs/checkpoints/stage2_vlm_C5b_lam0p5.pt", "uses_stage2": True},
+    # C6: pure-orientation (InfoNCE) with location AND scale pinned at baseline.
+    "C6_lam0p9":  {"connector": "outputs/checkpoints/stage2_vlm_C6_lam0p9.pt",  "uses_stage2": True},
 }
 
 

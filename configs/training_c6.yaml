@@ -1,0 +1,86 @@
+# C6: pure-orientation Stage-2 training (joint AR + InfoNCE, location & scale pinned).
+#
+# Identical to training_c4.yaml on the AR + contrastive (InfoNCE) sides, plus two
+# constraint terms that hold the non-orientation axes of the gap at their C2-init
+# baseline so InfoNCE can only move orientation:
+#   + lambda_p * ||mean_b(z) - mu_x0||^2 / trace_x   (hold location: baseline CLS centroid)
+#   + lambda_s * (btrace / btrace0 - 1)^2            (hold scale:    baseline CLS spread)
+# At lambda_p=0 and lambda_s=0 this reproduces C4 exactly. The connector is
+# initialized from C2's Stage-1 checkpoint (so lambda_o=0 == C3, as in C4/C5).
+
+data:
+  dataset: llava_instruct_150k
+  path: data/llava_instruct_150k
+  hf_repo: liuhaotian/LLaVA-Instruct-150K
+
+freeze:
+  vit: true
+  connector: false   # refined (trainable), as in Stage 2 / C4
+  llm: true          # base LLM frozen; only LoRA adapters train
+
+# Connector initialized from C2's contrastive Stage-1 connector (matches C3/C4/C5).
+init_from:
+  connector_checkpoint: outputs/checkpoints/stage1_connector_C2.pt
+
+# Orientation term: C4's InfoNCE, reused verbatim (CLS image side, mean-pool text
+# side, learnable temperature). Target text is the COCO train2017 caption.
+contrastive:
+  batch_size: 64                 # 63 in-batch negatives, as in Stage 1 / C4
+  lambda: 0.9                    # lambda_o (orientation); C4's best point. --lambda overrides
+  temperature_init: 0.07
+  max_caption_length: 64
+  caption_annotations: data/coco/annotations/captions_train2017.json
+
+# Pins: hold location and scale at the C2-init baseline so InfoNCE moves ONLY
+# orientation. A rotation about the mean preserves both mean and trace, so these
+# two pins leave orientation free; they only cancel NCE's incidental
+# translation/compression. mu_x0 and btrace0 are auto-measured at the first
+# contrastive step (connector still C2-init = baseline) unless overridden.
+pins:
+  lambda_p: 0.5                  # location-pin weight (--lambda-p overrides). 0 = plain C4
+  lambda_s: 1.0                  # scale-pin weight    (--lambda-s overrides). 1.0 proven in C5b
+  btrace0: null                  # null = auto-measure at step-1 CLS spread; set a number to pin
+  # trace_x normaliser for the location pin (same scale as C5's L_dist), computed
+  # once from the C3 image embeddings:
+  trace_x_source: outputs/embeddings/projected_C3_stage2_image_pooled.pt
+  trace_x: 4582.0                # fallback scalar if trace_x_source is absent
+
+lora:
+  enabled: true
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, o_proj]
+  bias: none
+
+optimizer:
+  name: adamw
+  lr: 2.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+schedule:
+  warmup_ratio: 0.03
+  type: cosine
+  num_epochs: 1
+
+batch:
+  # Same as Stage 2 / C4: B=4 + accum=8 -> eff. batch 32 (AR side).
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 8
+
+precision:
+  amp: bf16
+
+logging:
+  log_every_steps: 1
+  save_every_steps: 50
+  notify_every_steps: 50
+
+output:
+  # Per-run filename is set with --output-name (e.g. stage2_vlm_C6_lam0p9.pt).
+  checkpoint_path: outputs/checkpoints/stage2_vlm_C6.pt
+  log_dir: outputs/logs/c6
+
+seed: 42
