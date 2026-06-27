@@ -48,8 +48,8 @@ if [ ! -d "$CLIP_MODEL" ]; then
     exit 1
 fi
 
-# Only the new condition; C3/C4 CLIPScores already exist.
-CONDITIONS=(C5_lam0p5)
+# Only the new condition; C3/C4/C5_lam0p5 CLIPScores already exist.
+CONDITIONS=(C5_lam0p1)
 
 for c in "${CONDITIONS[@]}"; do
     echo "=== ${c} ==="
