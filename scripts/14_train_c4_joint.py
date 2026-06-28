@@ -93,6 +93,10 @@ def main():
                    help="fixed contrastive weight in (1-l)L_AR + l*L_NCE (overrides config)")
     p.add_argument("--kendall", action="store_true",
                    help="learn the balance via uncertainty weighting instead of a fixed lambda")
+    p.add_argument("--pool", choices=["cls", "all257"], default=None,
+                   help="image-side pooling for the InfoNCE term: 'cls' (token 0, "
+                        "original) or 'all257' (mean of all 257 projected tokens = the "
+                        "SAME pooled cloud subspace_overlap is measured on). Default: config or 'cls'")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
@@ -116,6 +120,7 @@ def main():
         else float(c_cfg.get("lambda", 0.1))
     )
     use_kendall = bool(args.kendall or c_cfg.get("use_kendall", False))
+    pool = args.pool if args.pool is not None else str(c_cfg.get("pool", "cls"))
 
     if args.output_name:
         out_dir = Path(cfg["output"]["checkpoint_path"]).parent
@@ -171,7 +176,7 @@ def main():
     )
     contrastive_iter = _contrastive_batches(c_dataset, captions, c_batch)
 
-    mode = "kendall" if use_kendall else f"convex lambda={lambda_contrastive}"
+    mode = ("kendall" if use_kendall else f"convex lambda={lambda_contrastive}") + f" pool={pool}"
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
         f"[C4] training started on {device_label}\n"
@@ -183,6 +188,7 @@ def main():
             vlm, ar_dataloader, contrastive_iter, cfg,
             lambda_contrastive=lambda_contrastive,
             use_kendall=use_kendall,
+            pool=pool,
             max_steps=args.max_steps,
             resume_from=Path(args.resume) if args.resume else None,
         )
@@ -191,7 +197,7 @@ def main():
         raise
     notify.send(f"[C4] training complete ({mode}) — checkpoint {ckpt}")
     snapshot_run_metadata(
-        {"c4": cfg, "args": vars(args), "lambda": lambda_contrastive, "kendall": use_kendall},
+        {"c4": cfg, "args": vars(args), "lambda": lambda_contrastive, "kendall": use_kendall, "pool": pool},
         Path(cfg["output"]["log_dir"]),
     )
     print(f"[ok] C4 VLM checkpoint: {ckpt}")

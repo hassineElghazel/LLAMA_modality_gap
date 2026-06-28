@@ -126,6 +126,10 @@ def main():
                         "CLS spread at btrace0 (overrides config). 0 = plain C5")
     p.add_argument("--btrace0", type=float, default=None,
                    help="C5b baseline CLS spread to pin to (default: config/29282)")
+    p.add_argument("--pool", choices=["cls", "all257"], default=None,
+                   help="image-side pooling for the distance term: 'cls' (token 0, "
+                        "original) or 'all257' (mean of all 257 projected tokens = the "
+                        "SAME pooled vector G_mu is measured on). Default: config or 'cls'")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
@@ -156,6 +160,7 @@ def main():
         args.btrace0 if args.btrace0 is not None
         else d_cfg.get("btrace0")  # may be None when scale pin is off
     )
+    pool = args.pool if args.pool is not None else str(d_cfg.get("pool", "cls"))
 
     if args.output_name:
         out_dir = Path(cfg["output"]["checkpoint_path"]).parent
@@ -218,7 +223,7 @@ def main():
     if lambda_s > 0:
         b0 = f"{float(btrace0):.1f}" if btrace0 is not None else "auto@step1"
         pin = f" + scale-pin lambda_s={lambda_s} btrace0={b0}"
-    mode = f"convex lambda_d={lambda_d}{pin}"
+    mode = f"convex lambda_d={lambda_d} pool={pool}{pin}"
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
         f"[C5] training started on {device_label}\n"
@@ -233,6 +238,7 @@ def main():
             trace_x=trace_x,
             lambda_s=lambda_s,
             btrace0=float(btrace0) if btrace0 is not None else None,
+            pool=pool,
             max_steps=args.max_steps,
             resume_from=Path(args.resume) if args.resume else None,
         )
@@ -242,7 +248,7 @@ def main():
     notify.send(f"[C5] training complete ({mode}) — checkpoint {ckpt}")
     snapshot_run_metadata(
         {"c5": cfg, "args": vars(args), "lambda_d": lambda_d,
-         "lambda_s": lambda_s, "btrace0": btrace0, "trace_x": trace_x},
+         "lambda_s": lambda_s, "btrace0": btrace0, "pool": pool, "trace_x": trace_x},
         Path(cfg["output"]["log_dir"]),
     )
     print(f"[ok] C5 VLM checkpoint: {ckpt}")

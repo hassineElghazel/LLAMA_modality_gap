@@ -31,6 +31,12 @@ distance:
   lambda_s: 0.0                  # overridden by --lambda-s; 1.0 for C5b
   btrace0: null                  # null = auto-measure at step-1 (C2-init spread);
                                  # set a number (e.g. 29282) to pin to a fixed value
+  # Image-side pooling for the distance term (--pool overrides):
+  #   cls    = close mean_b(projector(CLS)) — original C5 (control != measurement)
+  #   all257 = close mean_b(mean_257(projector(vis))) — the SAME pooled vector G_mu
+  #            is measured on / the decoder ingests (control == measurement; also
+  #            closes location without compressing trace_image, so no scale pin needed)
+  pool: cls
   # Frozen targets, precomputed once from the C3 diagnostic embeddings (the same
   # ones behind gap_C3_stage2.json):
   mu_y_source: outputs/embeddings/projected_C3_stage2_text_pooled.pt

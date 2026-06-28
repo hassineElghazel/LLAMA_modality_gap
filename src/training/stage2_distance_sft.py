@@ -55,6 +55,7 @@ def train_stage2_distance(
     trace_x: float,
     lambda_s: float = 0.0,
     btrace0: Optional[float] = None,
+    pool: str = "cls",
     max_steps: Optional[int] = None,
     progress_cb: Optional[Callable[[int, float, float], None]] = None,
     resume_from: Optional[Path] = None,
@@ -82,6 +83,13 @@ def train_stage2_distance(
     trace_x = float(trace_x)
     if trace_x <= 0:
         raise ValueError(f"trace_x must be positive, got {trace_x}")
+    # pool = "cls": close mean_b(projector(CLS)) (original). pool = "all257": close
+    # mean_b(mean_257(projector(vis))) -- the SAME pooled-257 vector that G_mu is
+    # measured on and that the decoder ingests, so control == measurement. At the
+    # pooled level the batch-mean gradient is a uniform translation, so location
+    # closes WITHOUT compressing trace_image by construction.
+    if pool not in ("cls", "all257"):
+        raise ValueError(f"pool must be 'cls' or 'all257', got {pool!r}")
 
     # C5b scale pin: hold the CLS-cloud spread (btrace) at its baseline btrace0.
     # btrace0 is FROZEN once set. If not provided, it is AUTO-MEASURED from the
@@ -132,7 +140,7 @@ def train_stage2_distance(
         pin_msg = ""
     console.log(
         f"[c5] trainable params: {n_trainable / 1e6:.2f}M  "
-        f"(convex lambda_d={lambda_d}, trace_x={trace_x:.1f}){pin_msg}"
+        f"(convex lambda_d={lambda_d}, pool={pool}, trace_x={trace_x:.1f}){pin_msg}"
     )
 
     vlm.train()
@@ -195,9 +203,14 @@ def train_stage2_distance(
         ibatch = next(image_iter)
         with torch.no_grad():
             vis = vlm.encoder.encode_image_tokens(ibatch["images"])  # (B,257,1024)
-        cls = vis[:, 0, :].to(device=device, dtype=conn_dtype)        # CLS token
+        vis = vis.to(device=device, dtype=conn_dtype)
         with torch.amp.autocast("cuda", dtype=dtype_amp, enabled=torch.cuda.is_available()):
-            z_img = vlm.projector(cls)                                # (B,4096)
+            if pool == "all257":
+                # control == measurement: pool ALL 257 projected tokens exactly as
+                # extract_projected / G_mu do (proj_tokens.mean(dim=1)).
+                z_img = vlm.projector(vis).mean(dim=1)                # (B,4096)
+            else:
+                z_img = vlm.projector(vis[:, 0, :])                   # CLS token (original)
         # Centroid + distance computed in fp32 for an accurate, well-conditioned
         # geometric term (gradient still flows back through z_img / connector).
         nonlocal btrace0
@@ -290,6 +303,7 @@ def train_stage2_distance(
     # Sidecar: record the distance-head state so the run is reportable.
     sidecar = {
         "mode": "distance_pinned" if use_scale_pin else "distance",
+        "pool": pool,
         "lambda_d": float(lambda_d),
         "lambda_s": float(lambda_s),
         "btrace0": btrace0 if use_scale_pin else None,

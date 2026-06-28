@@ -54,6 +54,7 @@ def train_stage2_joint(
     *,
     lambda_contrastive: float,
     use_kendall: bool = False,
+    pool: str = "cls",
     max_steps: Optional[int] = None,
     progress_cb: Optional[Callable[[int, float, float], None]] = None,
     resume_from: Optional[Path] = None,
@@ -68,6 +69,12 @@ def train_stage2_joint(
     device = torch.device(cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
     dtype_amp = torch.bfloat16 if cfg["precision"]["amp"] == "bf16" else torch.float32
     vlm.to(device)
+
+    # pool = "cls": InfoNCE on projector(CLS) (original). pool = "all257": InfoNCE on
+    # mean_257(projector(vis)) -- the SAME pooled-257 vector subspace_overlap / G_mu
+    # are measured on and the decoder ingests, so control == measurement.
+    if pool not in ("cls", "all257"):
+        raise ValueError(f"pool must be 'cls' or 'all257', got {pool!r}")
 
     # ----- freeze / trainable setup (identical to Stage 2) -----
     if cfg["freeze"].get("vit", True):
@@ -118,7 +125,7 @@ def train_stage2_joint(
     n_trainable = sum(p.numel() for p in trainable)
     console.log(
         f"[c4] trainable params: {n_trainable / 1e6:.2f}M  "
-        f"(mode={'kendall' if use_kendall else f'convex lambda={lambda_contrastive}'})"
+        f"(mode={'kendall' if use_kendall else f'convex lambda={lambda_contrastive}'}, pool={pool})"
     )
 
     vlm.train()
@@ -191,9 +198,13 @@ def train_stage2_joint(
         cbatch = next(contrastive_iter)
         with torch.no_grad():
             vis = vlm.encoder.encode_image_tokens(cbatch["images"])  # (B,257,1024)
-        cls = vis[:, 0, :].to(device=device, dtype=conn_dtype)        # CLS token
+        vis = vis.to(device=device, dtype=conn_dtype)
         with torch.amp.autocast("cuda", dtype=dtype_amp, enabled=torch.cuda.is_available()):
-            z_img = vlm.projector(cls)                                # (B,4096)
+            if pool == "all257":
+                # control == measurement: pool ALL 257 projected tokens.
+                z_img = vlm.projector(vis).mean(dim=1)                # (B,4096)
+            else:
+                z_img = vlm.projector(vis[:, 0, :])                   # CLS token (original)
             with torch.no_grad():
                 z_txt = encode_text_mean_pool(
                     cbatch["captions"], tokenizer, embed_layer, device, max_length=max_cap_len
@@ -266,6 +277,7 @@ def train_stage2_joint(
     # reportable (lambda_eff is the Kendall point overlaid on the sweep curve).
     sidecar = {
         "mode": "kendall" if use_kendall else "convex",
+        "pool": pool,
         "lambda_fixed": None if use_kendall else float(lambda_contrastive),
         "lambda_eff": _lambda_eff(),
         "temperature": float(temp.temperature),

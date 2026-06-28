@@ -28,6 +28,11 @@ contrastive:
   use_kendall: false             # overridden by --kendall for the reference run
   temperature_init: 0.07
   max_caption_length: 64
+  # Image-side pooling for the InfoNCE term (--pool overrides):
+  #   cls    = InfoNCE on projector(CLS) — original C4 (control != measurement)
+  #   all257 = InfoNCE on mean_257(projector(vis)) — the SAME pooled cloud
+  #            subspace_overlap is measured on (control == measurement).
+  pool: cls
   # Extract once from data/coco/annotations_trainval2017.zip:
   #   unzip -j data/coco/annotations_trainval2017.zip \
   #     annotations/captions_train2017.json -d data/coco/annotations/

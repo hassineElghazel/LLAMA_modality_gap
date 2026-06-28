@@ -55,6 +55,10 @@ CONDITIONS = {
     "C5b_lam0p5": {"connector": "outputs/checkpoints/stage2_vlm_C5b_lam0p5.pt", "uses_stage2": True},
     # C6: pure-orientation (InfoNCE) with location AND scale pinned at baseline.
     "C6_lam0p9":  {"connector": "outputs/checkpoints/stage2_vlm_C6_lam0p9.pt",  "uses_stage2": True},
+    # pooled-257 control==measurement variants: geometry term acts on the mean of
+    # all 257 projected tokens (the same vector pooled here), not the CLS token.
+    "C5p_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C5p_lam0p1.pt", "uses_stage2": True},
+    "C4p_lam0p9": {"connector": "outputs/checkpoints/stage2_vlm_C4p_lam0p9.pt", "uses_stage2": True},
 }
 
 

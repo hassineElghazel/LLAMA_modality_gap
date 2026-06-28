@@ -22,7 +22,9 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               "C4_kendall",
               "C5_lam0p1", "C5_lam0p3", "C5_lam0p5", "C5_lam0p7", "C5_lam0p9",
               "C5b_lam0p5",
-              "C6_lam0p9")
+              "C6_lam0p9",
+              # pooled-257 control==measurement variants (p = pooled):
+              "C5p_lam0p1", "C4p_lam0p9")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:
