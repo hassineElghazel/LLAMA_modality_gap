@@ -59,6 +59,8 @@ CONDITIONS = {
     # all 257 projected tokens (the same vector pooled here), not the CLS token.
     "C5p_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C5p_lam0p1.pt", "uses_stage2": True},
     "C4p_lam0p9": {"connector": "outputs/checkpoints/stage2_vlm_C4p_lam0p9.pt", "uses_stage2": True},
+    # C5bp: pooled distance + scale-pin (trace held) -> isolate location from compression.
+    "C5bp_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p1.pt", "uses_stage2": True},
 }
 
 

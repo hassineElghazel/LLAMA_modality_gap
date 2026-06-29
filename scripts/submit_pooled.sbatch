@@ -127,20 +127,23 @@ run_one() {
     tg_notify "✅ POOLED ${tag} done"
 }
 
-# --- C5p (PRIORITY): location closed on the MEASURED pooled-257 vector. ---
-# Matched to C5_lam0p1 (the C5-CLS peak); no scale pin needed (pooled batch-mean
-# is a clean translation -> closes G_mu without compressing trace_image).
-run_one C5p_lam0p1  stage2_vlm_C5p_lam0p1.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1
+# --- C5p: DONE (CLIPScore 0.648, SPICE 0.128 -- best in study, but trace
+# collapsed 62% so location vs compression is confounded). ---
+# run_one C5p_lam0p1  stage2_vlm_C5p_lam0p1.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1
 
-# --- C4p (second run): orientation on the MEASURED pooled-257 vector. ---
-# Uncomment to run after C5p (matched to C4_lam0p9, the orientation best point).
+# --- C5bp (PRIORITY): pooled distance + scale-pin. SAME location dose (lambda_d=0.1)
+# as C5p, only the trace pin differs -> isolates location-closing from the 62%
+# compression. C5bp ~ 0.648 => location is the driver; ~0.58 => compression was.
+run_one C5bp_lam0p1  stage2_vlm_C5bp_lam0p1.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1 --lambda-s 1.0
+
+# --- C4p (next): orientation on the MEASURED pooled-257 vector (control==measurement). ---
 # run_one C4p_lam0p9  stage2_vlm_C4p_lam0p9.pt  14_train_c4_joint.py     --pool all257 --lambda 0.9
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C5p_lam0p1.pt\`
-Gap: \`outputs/metrics/gap_C5p_lam0p1.json\`  Captions + CLIPScore done.
-Verdict: C5p still ~0.58 => location weak even when closing the MEASURED G_mu
-(the R@1<->captioning reconciliation is task-driven, not a CLS artifact);
-clearly higher => closing the measured pooled location DOES help captioning."
+Checkpoint: \`stage2_vlm_C5bp_lam0p1.pt\`
+Gap: \`outputs/metrics/gap_C5bp_lam0p1.json\`  Captions + CLIPScore done.
+Guardrail: btrace (pooled trace) should HOLD ~baseline while gap (G_mu) still closes.
+Verdict vs C5p (0.648): C5bp ~0.648 => location is the driver (compression irrelevant);
+~0.58 => the 62% compression was doing the work, not location."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
