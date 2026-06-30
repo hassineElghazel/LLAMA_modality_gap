@@ -121,6 +121,10 @@ def main():
                         "at btrace0 (overrides config). 0 = no pin")
     p.add_argument("--btrace0", type=float, default=None,
                    help="baseline CLS spread to pin to (default: config; null = auto@step1)")
+    p.add_argument("--pool", choices=("cls", "all257"), default=None,
+                   help="geometry object for InfoNCE + both pins: 'cls' (token 0, "
+                        "original) or 'all257' (mean of all 257 projected tokens = "
+                        "control==measurement). Default: config 'pool' or 'cls'.")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
@@ -156,6 +160,7 @@ def main():
         args.btrace0 if args.btrace0 is not None
         else p_cfg.get("btrace0")  # may be None -> auto-measure at step 1
     )
+    pool = args.pool if args.pool is not None else str(cfg.get("pool", "cls"))
 
     if args.output_name:
         out_dir = Path(cfg["output"]["checkpoint_path"]).parent
@@ -219,7 +224,7 @@ def main():
         b0 = f"{float(btrace0):.1f}" if btrace0 is not None else "auto@step1"
         pins.append(f"scale(lambda_s={lambda_s},btrace0={b0})")
     pin_label = " + ".join(pins) if pins else "none (== C4)"
-    mode = f"convex lambda_o={lambda_contrastive}  pins=[{pin_label}]"
+    mode = f"convex lambda_o={lambda_contrastive}  pool={pool}  pins=[{pin_label}]"
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
         f"[C6] training started on {device_label}\n"
@@ -233,7 +238,8 @@ def main():
             trace_x=trace_x,
             lambda_p=lambda_p,
             lambda_s=lambda_s,
-            mu_x0=None,  # auto-measure baseline CLS centroid at step 1
+            pool=pool,
+            mu_x0=None,  # auto-measure baseline centroid at step 1 (CLS or pooled)
             btrace0=float(btrace0) if btrace0 is not None else None,
             max_steps=args.max_steps,
             resume_from=Path(args.resume) if args.resume else None,

@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: C5p_lam0p1 (distance lambda_d=0.1 on the mean of all 257 tokens)."
+Running: C4bp_lam0p1 (InfoNCE lambda_o=0.1 + location-pin + scale-pin on the mean of all 257 tokens)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -131,19 +131,25 @@ run_one() {
 # collapsed 62% so location vs compression is confounded). ---
 # run_one C5p_lam0p1  stage2_vlm_C5p_lam0p1.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1
 
-# --- C5bp (PRIORITY): pooled distance + scale-pin. SAME location dose (lambda_d=0.1)
-# as C5p, only the trace pin differs -> isolates location-closing from the 62%
-# compression. C5bp ~ 0.648 => location is the driver; ~0.58 => compression was.
-run_one C5bp_lam0p1  stage2_vlm_C5bp_lam0p1.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1 --lambda-s 1.0
+# --- C5bp: DONE (CLIPScore 0.6337, SPICE 0.1217; trace HELD 4792, G_mu 29.6).
+# Location-alone-with-scale-held = +0.090 over C3 (86% of C5p's gain) => location
+# is the driver; the 62% compression in C5p added only +0.0144. ---
+# run_one C5bp_lam0p1  stage2_vlm_C5bp_lam0p1.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1 --lambda-s 1.0
 
-# --- C4p (next): orientation on the MEASURED pooled-257 vector (control==measurement). ---
-# run_one C4p_lam0p9  stage2_vlm_C4p_lam0p9.pt  14_train_c4_joint.py     --pool all257 --lambda 0.9
+# --- C4bp (PRIORITY): the orientation mirror of C5bp. Pooled InfoNCE (lambda_o=0.1)
+# with BOTH location-pin (lambda_p=0.5) and scale-pin (lambda_s=1.0) on the pooled-257
+# object -> hold location AND scale fixed, let InfoNCE rotate ONLY. Isolates the pure
+# orientation effect at control==measurement. Driver is 18 (orientation-pinned).
+# Guardrail: loc_drift ~0 and btrace ~baseline throughout; only subspace_overlap moves.
+# Verdict: clearly > C3 0.5433 => orientation is an independent lever; ~baseline =>
+# orientation alone does little (C4's win was the location it dragged along).
+run_one C4bp_lam0p1  stage2_vlm_C4bp_lam0p1.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.1 --lambda-p 0.5 --lambda-s 1.0
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C5bp_lam0p1.pt\`
-Gap: \`outputs/metrics/gap_C5bp_lam0p1.json\`  Captions + CLIPScore done.
-Guardrail: btrace (pooled trace) should HOLD ~baseline while gap (G_mu) still closes.
-Verdict vs C5p (0.648): C5bp ~0.648 => location is the driver (compression irrelevant);
-~0.58 => the 62% compression was doing the work, not location."
+Checkpoint: \`stage2_vlm_C4bp_lam0p1.pt\`
+Gap: \`outputs/metrics/gap_C4bp_lam0p1.json\`  Captions + CLIPScore done.
+Guardrail: loc_drift ~0 AND btrace ~baseline (both pinned) while subspace_overlap moves.
+Verdict vs C3 (0.5433) / C5bp (0.6337): C4bp clearly above C3 => orientation is an
+independent lever; C4bp ~ C3 => orientation alone is inert, location is the whole story."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"

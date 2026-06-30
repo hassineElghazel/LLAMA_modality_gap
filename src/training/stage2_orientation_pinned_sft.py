@@ -60,6 +60,7 @@ def train_stage2_orientation_pinned(
     trace_x: float,
     lambda_p: float = 0.0,
     lambda_s: float = 0.0,
+    pool: str = "cls",
     mu_x0: Optional[torch.Tensor] = None,
     btrace0: Optional[float] = None,
     max_steps: Optional[int] = None,
@@ -88,6 +89,12 @@ def train_stage2_orientation_pinned(
     trace_x = float(trace_x)
     if trace_x <= 0:
         raise ValueError(f"trace_x must be positive, got {trace_x}")
+    # pool = "cls": orientation + pins act on projector(CLS) (original C4/C6 path).
+    # pool = "all257": they act on mean_257(projector(vis)) -- the SAME pooled-257
+    # vector G_mu / subspace_overlap are measured on and the decoder ingests, so
+    # control == measurement (mirrors the C5/C5bp distance trainer).
+    if pool not in ("cls", "all257"):
+        raise ValueError(f"pool must be 'cls' or 'all257', got {pool!r}")
     use_loc_pin = lambda_p > 0.0
     use_scale_pin = lambda_s > 0.0
     if use_loc_pin and mu_x0 is not None:
@@ -147,7 +154,7 @@ def train_stage2_orientation_pinned(
         pin_msg += f"  scale-pin lambda_s={lambda_s} btrace0={b0}"
     console.log(
         f"[c6] trainable params: {n_trainable / 1e6:.2f}M  "
-        f"(convex lambda_o={lambda_contrastive}, trace_x={trace_x:.1f}){pin_msg}"
+        f"(convex lambda_o={lambda_contrastive}, pool={pool}, trace_x={trace_x:.1f}){pin_msg}"
     )
 
     vlm.train()
@@ -216,9 +223,14 @@ def train_stage2_orientation_pinned(
         cbatch = next(contrastive_iter)
         with torch.no_grad():
             vis = vlm.encoder.encode_image_tokens(cbatch["images"])   # (B,257,1024)
-        cls = vis[:, 0, :].to(device=device, dtype=conn_dtype)         # CLS token
+        vis = vis.to(device=device, dtype=conn_dtype)
         with torch.amp.autocast("cuda", dtype=dtype_amp, enabled=torch.cuda.is_available()):
-            z_img = vlm.projector(cls)                                 # (B,4096)
+            if pool == "all257":
+                # control == measurement: pool ALL 257 projected tokens exactly as
+                # extract_projected / G_mu do (proj_tokens.mean(dim=1)).
+                z_img = vlm.projector(vis).mean(dim=1)                 # (B,4096)
+            else:
+                z_img = vlm.projector(vis[:, 0, :])                   # CLS token (original)
             with torch.no_grad():
                 z_txt = encode_text_mean_pool(
                     cbatch["captions"], tokenizer, embed_layer, device, max_length=max_cap_len
@@ -327,6 +339,7 @@ def train_stage2_orientation_pinned(
     # Sidecar: record the orientation head + pin state so the run is reportable.
     sidecar = {
         "mode": "orientation_pinned",
+        "pool": pool,
         "lambda_o": float(lambda_contrastive),
         "lambda_p": float(lambda_p),
         "lambda_s": float(lambda_s),
