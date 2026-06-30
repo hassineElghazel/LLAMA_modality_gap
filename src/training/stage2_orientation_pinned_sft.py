@@ -320,7 +320,7 @@ def train_stage2_orientation_pinned(
                     if notify_every and step % notify_every == 0:
                         pct = 100 * step / total_steps
                         notify.send(
-                            f"[C6] step {step}/{total_steps} ({pct:.0f}%)\n"
+                            f"[{cfg.get('run_tag', 'C6')}] step {step}/{total_steps} ({pct:.0f}%)\n"
                             f"L_ar={out.loss.item():.4f} L_nce={last_nce:.4f} "
                             f"drift={diag['loc_drift']:.2f} btrace={diag['btrace']:.1f}"
                         )

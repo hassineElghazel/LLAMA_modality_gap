@@ -28,7 +28,7 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # C5bp = pooled distance + scale-pin (isolate location from compression):
               "C5bp_lam0p1",
               # C4bp = pooled InfoNCE + location-pin + scale-pin (isolate orientation):
-              "C4bp_lam0p1")
+              "C4bp_lam0p1", "C4bp_lam0p9")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:

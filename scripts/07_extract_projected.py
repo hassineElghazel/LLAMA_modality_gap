@@ -64,6 +64,9 @@ CONDITIONS = {
     # C4bp: pooled InfoNCE + location-pin + scale-pin -> isolate ORIENTATION (mirror
     # of C5bp: hold location AND scale, let InfoNCE rotate only).
     "C4bp_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C4bp_lam0p1.pt", "uses_stage2": True},
+    # C4bp_lam0p9: higher orientation dose (C4's strong point) if lambda_o=0.1 shows
+    # no subspace_overlap movement -- distinguishes "orientation inert" from "dose too low".
+    "C4bp_lam0p9": {"connector": "outputs/checkpoints/stage2_vlm_C4bp_lam0p9.pt", "uses_stage2": True},
 }
 
 

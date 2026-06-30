@@ -162,10 +162,20 @@ def main():
     )
     pool = args.pool if args.pool is not None else str(cfg.get("pool", "cls"))
 
+    # Display tag for logs/notifications. This module is the shared pinned-orientation
+    # trainer (C6 = CLS, C4bp = pooled, future pinned variants); derive the label from
+    # the checkpoint name so each run self-labels (e.g. C4bp_lam0p1) instead of always
+    # printing "[C6]". Falls back to "C6" when no --output-name is given.
+    run_tag = (
+        Path(args.output_name).stem.replace("stage2_vlm_", "")
+        if args.output_name else "C6"
+    )
+    cfg["run_tag"] = run_tag
+
     if args.output_name:
         out_dir = Path(cfg["output"]["checkpoint_path"]).parent
         cfg["output"]["checkpoint_path"] = str(out_dir / args.output_name)
-        print(f"[c6] checkpoint output -> {cfg['output']['checkpoint_path']}")
+        print(f"[{run_tag}] checkpoint output -> {cfg['output']['checkpoint_path']}")
 
     # Encoder (frozen CLIP ViT-L/14).
     encoder = build_clip_encoder(enc_cfg).load()
@@ -227,7 +237,7 @@ def main():
     mode = f"convex lambda_o={lambda_contrastive}  pool={pool}  pins=[{pin_label}]"
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
-        f"[C6] training started on {device_label}\n"
+        f"[{run_tag}] training started on {device_label}\n"
         f"mode={mode}  c_batch={c_batch}  eff_batch={batch_size * accum}\n"
         f"trace_x={trace_x:.1f}  total_steps={cfg['total_steps']:,}  max_steps={args.max_steps}"
     )
@@ -245,9 +255,9 @@ def main():
             resume_from=Path(args.resume) if args.resume else None,
         )
     except Exception as exc:
-        notify.send(f"[C6] FAILED ({mode}): {exc}")
+        notify.send(f"[{run_tag}] FAILED ({mode}): {exc}")
         raise
-    notify.send(f"[C6] training complete ({mode}) — checkpoint {ckpt}")
+    notify.send(f"[{run_tag}] training complete ({mode}) — checkpoint {ckpt}")
     snapshot_run_metadata(
         {"c6": cfg, "args": vars(args), "lambda_o": lambda_contrastive,
          "lambda_p": lambda_p, "lambda_s": lambda_s, "btrace0": btrace0, "trace_x": trace_x},
