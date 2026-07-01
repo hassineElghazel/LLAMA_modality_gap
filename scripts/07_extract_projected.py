@@ -67,6 +67,9 @@ CONDITIONS = {
     # C4bp_lam0p9: higher orientation dose (C4's strong point) if lambda_o=0.1 shows
     # no subspace_overlap movement -- distinguishes "orientation inert" from "dose too low".
     "C4bp_lam0p9": {"connector": "outputs/checkpoints/stage2_vlm_C4bp_lam0p9.pt", "uses_stage2": True},
+    # C3pin: pins-only control (location-pin + scale-pin, lambda_o=0, NO InfoNCE) = C3
+    # with location held at C2's 177 -> the clean location-177 anchor (vs C3 and C4bp).
+    "C3pin": {"connector": "outputs/checkpoints/stage2_vlm_C3pin.pt", "uses_stage2": True},
 }
 
 

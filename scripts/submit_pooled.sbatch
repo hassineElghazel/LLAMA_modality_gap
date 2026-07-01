@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: C4bp_lam0p9 (InfoNCE lambda_o=0.9 + hard location-pin lambda_p=10 + scale-pin on the mean of all 257 tokens)."
+Running: C3pin (pins-only control: location-pin lambda_p=10 + scale-pin lambda_s=1.0, NO InfoNCE, full AR -- the location-177 anchor)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -145,24 +145,32 @@ run_one() {
 # number != matching the effect. Scale-pin held fine (btrace ~4767). ---
 # run_one C4bp_lam0p1  stage2_vlm_C4bp_lam0p1.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.1 --lambda-p 0.5 --lambda-s 1.0
 
-# --- C4bp_lam0p9 (ACTIVE): the orientation mirror of C5bp, retuned. Orientation dose
-# lambda_o=0.9 (C4's strong point, where q16 actually moved to 0.097) + a HARD location
-# pin lambda_p=10 + scale-pin lambda_s=1.0, all on the pooled-257 object. A strong
-# location pin does NOT block orientation: a rotation about the mean leaves the mean
-# fixed, so lambda_p only penalises TRANSLATION -> InfoNCE is forced to align by
-# rotating (orientation) instead of translating. Holds location AND scale, lets ONLY
-# orientation move => clean isolation at control==measurement.
-# WATCH first ~15-20 steps: L_nce should FALL (toward ~2-3, not stuck at 3.85) AND
-# loc_drift should stay SMALL (<~15). If drift creeps past ~20, bump --lambda-p to 20-30.
-# Verdict: clearly > C3 0.5433 => orientation is an independent lever; ~baseline =>
-# orientation alone does little (C4's win was the location it dragged along).
-run_one C4bp_lam0p9  stage2_vlm_C4bp_lam0p9.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.9 --lambda-p 10 --lambda-s 1.0
+# --- C4bp_lam0p9: DONE (job 86013). Clean pure-orientation run: location HELD at
+# C2's 177 (drift ~12), scale held (trace 5031), orientation moved HUGE q16 0.051->0.168
+# (> CLS C4's 0.137). CLIPScore 0.5886, SPICE 0.1053 -- 0.045 (~28 SE) BELOW C5bp's
+# 0.634 (pure location). => LOCATION DOMINATES; orientation strongly manipulable but
+# weakly effective. (+0.017 over the location-177 interpolation ~0.572 = possible small
+# orientation effect OR curvature; C3pin below resolves it.) ---
+# run_one C4bp_lam0p9  stage2_vlm_C4bp_lam0p9.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.9 --lambda-p 10 --lambda-s 1.0
+
+# --- C3pin (ACTIVE): pins-only control = C3 baseline (full AR, lambda_o=0) with the
+# location-pin (lambda_p=10) + scale-pin (lambda_s=1.0) on pooled-257, NO InfoNCE.
+# Holds location at C2's 177 and scale at baseline while captioning; orientation stays
+# at baseline (nothing pushes it). PURPOSE: the true location-177 anchor.
+#   * C3pin vs C3 (both AR weight 1.0) = CLEAN "hold location at 177" effect -> 3rd point
+#     on the location dose-response (C3@246->0.543, C3pin@177->?, C5bp@30->0.634).
+#   * C4bp vs C3pin = orientation effect (AR-weight caveat: C4bp AR=0.1 vs C3pin AR=1.0,
+#     but the C4 sweep showed CLIPScore flat across AR 0.1-0.9, so negligible).
+# Verdict on the +0.017 excess: C3pin ~0.572 => orientation IS a small real lever;
+# C3pin ~0.589 (== C4bp) => orientation fully inert, the whole gain was held-location.
+# WATCH: loc_drift ~0 (pin holds), btrace ~baseline, L_nce IGNORED (weighted 0).
+run_one C3pin  stage2_vlm_C3pin.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C4bp_lam0p9.pt\`
-Gap: \`outputs/metrics/gap_C4bp_lam0p9.json\`  Captions + CLIPScore done.
-Guardrail: loc_drift ~0 AND btrace ~baseline (both pinned) while subspace_overlap moves.
-Verdict vs C3 (0.5433) / C5bp (0.6337): C4bp clearly above C3 => orientation is an
-independent lever; C4bp ~ C3 => orientation alone is inert, location is the whole story."
+Checkpoint: \`stage2_vlm_C3pin.pt\`
+Gap: \`outputs/metrics/gap_C3pin.json\`  Captions + CLIPScore done.
+Guardrail: loc_drift ~0 AND btrace ~baseline (both pinned); q16 stays ~baseline 0.05.
+Verdict on the +0.017 orientation excess: C3pin ~0.572 => small real orientation lever;
+C3pin ~0.589 (== C4bp) => orientation fully inert, C4bp's gain was all held-location."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
