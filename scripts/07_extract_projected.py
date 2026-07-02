@@ -66,6 +66,9 @@ CONDITIONS = {
     "C5bp_lam0p7":  {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p7.pt",  "uses_stage2": True},
     "C5bp_lam0p5":  {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p5.pt",  "uses_stage2": True},
     "C5bp_lam0p3":  {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p3.pt",  "uses_stage2": True},
+    # trace-held (low-lambda_d) points -- the clean location curve:
+    "C5bp_lam0p05": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p05.pt", "uses_stage2": True},
+    "C5bp_lam0p02": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p02.pt", "uses_stage2": True},
     "C5bp_lam0p01": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p01.pt", "uses_stage2": True},
     # C4bp: pooled InfoNCE + location-pin + scale-pin -> isolate ORIENTATION (mirror
     # of C5bp: hold location AND scale, let InfoNCE rotate only).

@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: C5bp_lam0p9 (location dose-response sweep, MAX closure: distance lambda_d=0.9 + scale-pin lambda_s=1.0 -- the clean-location ceiling)."
+Running: C5bp_lam0p01 (TRACE-HELD location sweep, high-G_mu end: distance lambda_d=0.01 + scale-pin lambda_s=1.0; expect G_mu ~130-160, btrace held ~4767)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -168,23 +168,27 @@ run_one() {
 # CHAIR_i 0.438, recall 0.391; verbose obj/cap 5.04). Controls AR-drift + verbosity. ---
 # run_one C3pin  stage2_vlm_C3pin.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0
 
-# --- C5bp LOCATION DOSE-RESPONSE SWEEP (ACTIVE) ---
-# Vary --lambda-d (AR weight = 1-lambda_d) while HOLDING scale-pin --lambda-s 1.0, so
-# trace is held at EVERY point => clean location isolation, no compression confound on
-# the whole curve. lambda_d saturates location fast, so 0.1-0.9 likely bunch near
-# G_mu ~25-30 and lambda_d=0.01 gives the high-G_mu spread -> PLOT outcomes vs the
-# MEASURED G_mu, not vs lambda_d. Run ONE per job; uncomment the next in sequence.
-# Starting with 0.9 = MAX closure (the clean-location ceiling; AR weight 0.1, shown fine by C4_lam0p9).
-run_one C5bp_lam0p9   stage2_vlm_C5bp_lam0p9.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.9  --lambda-s 1.0
-# run_one C5bp_lam0p7   stage2_vlm_C5bp_lam0p7.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.7  --lambda-s 1.0
-# run_one C5bp_lam0p5   stage2_vlm_C5bp_lam0p5.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.5  --lambda-s 1.0
-# run_one C5bp_lam0p3   stage2_vlm_C5bp_lam0p3.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.3  --lambda-s 1.0
-# run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
+# --- C5bp LOCATION DOSE-RESPONSE SWEEP: TRACE HELD (ACTIVE) ---
+# Goal: sample location (G_mu) at DIFFERENT points while trace stays at baseline (no
+# compression). Sweep --lambda-d DOWNWARD, holding scale-pin --lambda-s 1.0.
+# WHY downward: HIGH lambda_d (0.3-0.9) does NOT close location further -- it saturates
+# at G_mu ~30 by lambda_d=0.1 -- it only COMPRESSES trace (the distance pull, realized
+# via the shared connector toward the near-origin mu_y, shrinks output; the soft pin
+# loses the tug-of-war). Verified on C5bp_lam0p9 (ABANDONED job 86227): G_mu->30 but
+# btrace 4767->3006 (-37%). So trace-held closure lives at LOW lambda_d. At low lambda_d
+# the pin wins and trace holds (lambda_d=0.1 held btrace 4792). Weaker lambda_d = less
+# closure = higher G_mu with trace held. Run ONE per job; PLOT vs MEASURED G_mu.
+# Now: lambda_d=0.01 (the high-G_mu, trace-held end; expect G_mu ~130-160, btrace ~4767).
+run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
+# staged (uncomment one per job) -- fill the trace-held curve between 0.01 and 0.1:
+# run_one C5bp_lam0p02  stage2_vlm_C5bp_lam0p02.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.02 --lambda-s 1.0
+# run_one C5bp_lam0p05  stage2_vlm_C5bp_lam0p05.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.05 --lambda-s 1.0
+# ABANDONED (trace compresses, does not close further): lambda_d 0.3 / 0.5 / 0.7 / 0.9.
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C5bp_lam0p9.pt\`
-Gap: \`outputs/metrics/gap_C5bp_lam0p9.json\`  Captions + CLIPScore done.
-Watch: G_mu (MAX closure, expect ~20-25), btrace HELD ~baseline (scale-pin), eff_rank (collapse risk).
-Sweep: 0.9 done -> next uncomment 0.7/0.5/0.3/0.01 (one per job); plot CLIPScore/CHAIR vs MEASURED G_mu."
+Checkpoint: \`stage2_vlm_C5bp_lam0p01.pt\`
+Gap: \`outputs/metrics/gap_C5bp_lam0p01.json\`  Captions + CLIPScore done.
+CHECK: btrace HELD ~4767 (trace NOT compressed) AND G_mu only partially closed (~130-160); eff_rank ~baseline.
+Sweep: trace-held curve = {0.01 (this), 0.02, 0.05, 0.1 done}; plot CLIPScore/CHAIR vs MEASURED G_mu."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
