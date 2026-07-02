@@ -61,6 +61,12 @@ CONDITIONS = {
     "C4p_lam0p9": {"connector": "outputs/checkpoints/stage2_vlm_C4p_lam0p9.pt", "uses_stage2": True},
     # C5bp: pooled distance + scale-pin (trace held) -> isolate location from compression.
     "C5bp_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p1.pt", "uses_stage2": True},
+    # C5bp location dose-response sweep: vary lambda_d, scale-pin held (lambda_s=1.0).
+    "C5bp_lam0p9":  {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p9.pt",  "uses_stage2": True},
+    "C5bp_lam0p7":  {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p7.pt",  "uses_stage2": True},
+    "C5bp_lam0p5":  {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p5.pt",  "uses_stage2": True},
+    "C5bp_lam0p3":  {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p3.pt",  "uses_stage2": True},
+    "C5bp_lam0p01": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p01.pt", "uses_stage2": True},
     # C4bp: pooled InfoNCE + location-pin + scale-pin -> isolate ORIENTATION (mirror
     # of C5bp: hold location AND scale, let InfoNCE rotate only).
     "C4bp_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C4bp_lam0p1.pt", "uses_stage2": True},

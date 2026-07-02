@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: C3pin (pins-only control: location-pin lambda_p=10 + scale-pin lambda_s=1.0, NO InfoNCE, full AR -- the location-177 anchor)."
+Running: C5bp_lam0p9 (location dose-response sweep, MAX closure: distance lambda_d=0.9 + scale-pin lambda_s=1.0 -- the clean-location ceiling)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -164,13 +164,27 @@ run_one() {
 # Verdict on the +0.017 excess: C3pin ~0.572 => orientation IS a small real lever;
 # C3pin ~0.589 (== C4bp) => orientation fully inert, the whole gain was held-location.
 # WATCH: loc_drift ~0 (pin holds), btrace ~baseline, L_nce IGNORED (weighted 0).
-run_one C3pin  stage2_vlm_C3pin.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0
+# --- C3pin: DONE (the real captioning baseline: G_mu 177.8, CLIPScore 0.580,
+# CHAIR_i 0.438, recall 0.391; verbose obj/cap 5.04). Controls AR-drift + verbosity. ---
+# run_one C3pin  stage2_vlm_C3pin.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0
+
+# --- C5bp LOCATION DOSE-RESPONSE SWEEP (ACTIVE) ---
+# Vary --lambda-d (AR weight = 1-lambda_d) while HOLDING scale-pin --lambda-s 1.0, so
+# trace is held at EVERY point => clean location isolation, no compression confound on
+# the whole curve. lambda_d saturates location fast, so 0.1-0.9 likely bunch near
+# G_mu ~25-30 and lambda_d=0.01 gives the high-G_mu spread -> PLOT outcomes vs the
+# MEASURED G_mu, not vs lambda_d. Run ONE per job; uncomment the next in sequence.
+# Starting with 0.9 = MAX closure (the clean-location ceiling; AR weight 0.1, shown fine by C4_lam0p9).
+run_one C5bp_lam0p9   stage2_vlm_C5bp_lam0p9.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.9  --lambda-s 1.0
+# run_one C5bp_lam0p7   stage2_vlm_C5bp_lam0p7.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.7  --lambda-s 1.0
+# run_one C5bp_lam0p5   stage2_vlm_C5bp_lam0p5.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.5  --lambda-s 1.0
+# run_one C5bp_lam0p3   stage2_vlm_C5bp_lam0p3.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.3  --lambda-s 1.0
+# run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C3pin.pt\`
-Gap: \`outputs/metrics/gap_C3pin.json\`  Captions + CLIPScore done.
-Guardrail: loc_drift ~0 AND btrace ~baseline (both pinned); q16 stays ~baseline 0.05.
-Verdict on the +0.017 orientation excess: C3pin ~0.572 => small real orientation lever;
-C3pin ~0.589 (== C4bp) => orientation fully inert, C4bp's gain was all held-location."
+Checkpoint: \`stage2_vlm_C5bp_lam0p9.pt\`
+Gap: \`outputs/metrics/gap_C5bp_lam0p9.json\`  Captions + CLIPScore done.
+Watch: G_mu (MAX closure, expect ~20-25), btrace HELD ~baseline (scale-pin), eff_rank (collapse risk).
+Sweep: 0.9 done -> next uncomment 0.7/0.5/0.3/0.01 (one per job); plot CLIPScore/CHAIR vs MEASURED G_mu."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"

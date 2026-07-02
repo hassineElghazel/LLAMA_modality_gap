@@ -30,7 +30,9 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # C4bp = pooled InfoNCE + location-pin + scale-pin (isolate orientation):
               "C4bp_lam0p1", "C4bp_lam0p9",
               # C3pin = pins-only control (lambda_o=0, location+scale pinned): location-177 anchor:
-              "C3pin")
+              "C3pin",
+              # C5bp location dose-response sweep (vary lambda_d, hold scale-pin lambda_s=1.0):
+              "C5bp_lam0p9", "C5bp_lam0p7", "C5bp_lam0p5", "C5bp_lam0p3", "C5bp_lam0p01")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:
