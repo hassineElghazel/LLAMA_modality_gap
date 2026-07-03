@@ -70,6 +70,8 @@ CONDITIONS = {
     "C5bp_lam0p05": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p05.pt", "uses_stage2": True},
     "C5bp_lam0p02": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p02.pt", "uses_stage2": True},
     "C5bp_lam0p01": {"connector": "outputs/checkpoints/stage2_vlm_C5bp_lam0p01.pt", "uses_stage2": True},
+    # single-axis SCALE test: hold location@177 + no InfoNCE, drive trace to target.
+    "Cscale2000":  {"connector": "outputs/checkpoints/stage2_vlm_Cscale2000.pt",  "uses_stage2": True},
     # C4bp: pooled InfoNCE + location-pin + scale-pin -> isolate ORIENTATION (mirror
     # of C5bp: hold location AND scale, let InfoNCE rotate only).
     "C4bp_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C4bp_lam0p1.pt", "uses_stage2": True},

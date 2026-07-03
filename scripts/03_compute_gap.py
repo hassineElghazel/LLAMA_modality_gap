@@ -34,7 +34,9 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # C5bp location dose-response sweep (vary lambda_d, hold scale-pin lambda_s=1.0):
               "C5bp_lam0p9", "C5bp_lam0p7", "C5bp_lam0p5", "C5bp_lam0p3",
               # trace-held (low-lambda_d) points -- the clean location curve:
-              "C5bp_lam0p05", "C5bp_lam0p02", "C5bp_lam0p01")
+              "C5bp_lam0p05", "C5bp_lam0p02", "C5bp_lam0p01",
+              # single-axis SCALE test: hold location@177 + no InfoNCE, drive trace to target:
+              "Cscale2000")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:

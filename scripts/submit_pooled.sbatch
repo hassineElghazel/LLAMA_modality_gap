@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: C5bp_lam0p3 (trace-hold THRESHOLD probe: distance lambda_d=0.3 + scale-pin lambda_s=1.0; location saturates ~G_mu 25-30, WATCH whether btrace holds ~4767 or compresses)."
+Running: Cscale2000 (SCALE isolation test: hold location @177 + no orientation, DRIVE trace to ~2000 via --btrace0; answers does compression alone help/hurt captioning)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -168,30 +168,27 @@ run_one() {
 # CHAIR_i 0.438, recall 0.391; verbose obj/cap 5.04). Controls AR-drift + verbosity. ---
 # run_one C3pin  stage2_vlm_C3pin.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0
 
-# --- C5bp LOCATION DOSE-RESPONSE SWEEP: TRACE HELD (ACTIVE) ---
-# Goal: sample location (G_mu) at DIFFERENT points while trace stays at baseline (no
-# compression). Sweep --lambda-d DOWNWARD, holding scale-pin --lambda-s 1.0.
-# WHY downward: HIGH lambda_d (0.3-0.9) does NOT close location further -- it saturates
-# at G_mu ~30 by lambda_d=0.1 -- it only COMPRESSES trace (the distance pull, realized
-# via the shared connector toward the near-origin mu_y, shrinks output; the soft pin
-# loses the tug-of-war). Verified on C5bp_lam0p9 (ABANDONED job 86227): G_mu->30 but
-# btrace 4767->3006 (-37%). So trace-held closure lives at LOW lambda_d. At low lambda_d
-# the pin wins and trace holds (lambda_d=0.1 held btrace 4792). Weaker lambda_d = less
-# closure = higher G_mu with trace held. Run ONE per job; PLOT vs MEASURED G_mu.
-# DONE: lambda_d=0.01 -> G_mu 81, btrace HELD 4788, CLIP 0.624 (trace-held intermediate point).
+# --- C5bp LOCATION SWEEP: DONE (location axis SETTLED, no further runs) ---
+# Trace-held dose-response established: C3pin(177,0.580) -> C5bp_0.01(81,0.624) ->
+# C5bp_0.1(30,0.634), trace held throughout; effect SATURATES ~G_mu 80. lambda_d=0.3
+# threshold probe CANCELED (low value now). Location proven.
 # run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
-# Now: lambda_d=0.3 -- maps the trace-hold THRESHOLD (0.1 held 4792, 0.9 compressed 3006 -37%).
-# Location expected to SATURATE ~G_mu 25-30 (no new location point); WATCH btrace: held =>
-# matched-location trace contrast vs C5bp_lam0p1; compressed => mid-compression point at fixed loc.
-run_one C5bp_lam0p3   stage2_vlm_C5bp_lam0p3.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.3  --lambda-s 1.0
-# staged trace-held fill (uncomment one per job): 0.02 (~G_mu 110), 0.05 (~G_mu 55):
-# run_one C5bp_lam0p02  stage2_vlm_C5bp_lam0p02.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.02 --lambda-s 1.0
-# run_one C5bp_lam0p05  stage2_vlm_C5bp_lam0p05.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.05 --lambda-s 1.0
+
+# --- SCALE (TRACE) ISOLATION TEST (ACTIVE) -- step A of the single-axis program ---
+# Move ONE axis = TRACE. Hold LOCATION (loc-pin lambda_p=10 @debut 177) + ORIENTATION
+# (no InfoNCE, lambda=0). DRIVE trace DOWN by setting the scale-pin TARGET below baseline:
+# --btrace0 2000 (vs auto ~4767) => L_scale=(btrace/2000-1)^2 compresses toward ~2000.
+# This is the C3pin recipe with a LOW scale target -- reuses 18_train, NO code change.
+# ANSWERS: at FIXED debut location, does compressing trace help or hurt captioning?
+# (Rank not pinned yet -> MEASURE eff_rank; the rank knob is step B, built next.)
+# WATCH: btrace descends toward ~2000 (if it plateaus >3000, bump --lambda-s next run);
+# G_mu HELD ~177 (loc-pin); q16 ~0.05 (no InfoNCE). Baseline to compare = C3pin (177, trace 4312).
+run_one Cscale2000  stage2_vlm_Cscale2000.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 2000
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C5bp_lam0p3.pt\`
-Gap: \`outputs/metrics/gap_C5bp_lam0p3.json\`  Captions + CLIPScore done.
-CHECK: G_mu (expect saturated ~25-30) and btrace -- threshold probe: HELD ~4767 or COMPRESSED (<4000)?
+Checkpoint: \`stage2_vlm_Cscale2000.pt\`
+Gap: \`outputs/metrics/gap_Cscale2000.json\`  Captions + CLIPScore done.
+CHECK: trace DROPPED toward ~2000, G_mu HELD ~177, q16 ~0.05. vs C3pin(177,trace4312): does CLIP move?
 Reference: lambda_d 0.1 held 4792, 0.9 compressed to 3006. 0.3 locates the trace-hold cliff."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
