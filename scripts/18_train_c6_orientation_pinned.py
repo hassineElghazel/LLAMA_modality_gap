@@ -121,6 +121,12 @@ def main():
                         "at btrace0 (overrides config). 0 = no pin")
     p.add_argument("--btrace0", type=float, default=None,
                    help="baseline CLS spread to pin to (default: config; null = auto@step1)")
+    p.add_argument("--lambda-rank", dest="lambda_r", type=float, default=None,
+                   help="rank-pin weight: + l_r*(eff_rank/effrank0 - 1)^2 holds the "
+                        "participation-ratio eff_rank at effrank0 (scale-invariant, "
+                        "orthogonal to the scale pin). 0 = no pin")
+    p.add_argument("--effrank0", type=float, default=None,
+                   help="explicit rank-pin target (participation ratio); null = auto@step1")
     p.add_argument("--pool", choices=("cls", "all257"), default=None,
                    help="geometry object for InfoNCE + both pins: 'cls' (token 0, "
                         "original) or 'all257' (mean of all 257 projected tokens = "
@@ -159,6 +165,14 @@ def main():
     btrace0 = (
         args.btrace0 if args.btrace0 is not None
         else p_cfg.get("btrace0")  # may be None -> auto-measure at step 1
+    )
+    lambda_r = (
+        args.lambda_r if args.lambda_r is not None
+        else float(p_cfg.get("lambda_r", 0.0))
+    )
+    effrank0 = (
+        args.effrank0 if args.effrank0 is not None
+        else p_cfg.get("effrank0")  # may be None -> auto-measure at step 1
     )
     pool = args.pool if args.pool is not None else str(cfg.get("pool", "cls"))
 
@@ -233,6 +247,9 @@ def main():
     if lambda_s > 0:
         b0 = f"{float(btrace0):.1f}" if btrace0 is not None else "auto@step1"
         pins.append(f"scale(lambda_s={lambda_s},btrace0={b0})")
+    if lambda_r > 0:
+        r0 = f"{float(effrank0):.2f}" if effrank0 is not None else "auto@step1"
+        pins.append(f"rank(lambda_r={lambda_r},effrank0={r0})")
     pin_label = " + ".join(pins) if pins else "none (== C4)"
     mode = f"convex lambda_o={lambda_contrastive}  pool={pool}  pins=[{pin_label}]"
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
@@ -251,6 +268,8 @@ def main():
             pool=pool,
             mu_x0=None,  # auto-measure baseline centroid at step 1 (CLS or pooled)
             btrace0=float(btrace0) if btrace0 is not None else None,
+            lambda_r=lambda_r,
+            effrank0=float(effrank0) if effrank0 is not None else None,
             max_steps=args.max_steps,
             resume_from=Path(args.resume) if args.resume else None,
         )
@@ -260,7 +279,8 @@ def main():
     notify.send(f"[{run_tag}] training complete ({mode}) — checkpoint {ckpt}")
     snapshot_run_metadata(
         {"c6": cfg, "args": vars(args), "lambda_o": lambda_contrastive,
-         "lambda_p": lambda_p, "lambda_s": lambda_s, "btrace0": btrace0, "trace_x": trace_x},
+         "lambda_p": lambda_p, "lambda_s": lambda_s, "btrace0": btrace0,
+         "lambda_r": lambda_r, "effrank0": effrank0, "trace_x": trace_x},
         Path(cfg["output"]["log_dir"]),
     )
     print(f"[ok] C6 VLM checkpoint: {ckpt}")

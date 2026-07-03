@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: Cscale2000 (SCALE isolation test: hold location @177 + no orientation, DRIVE trace to ~2000 via --btrace0; answers does compression alone help/hurt captioning)."
+Running: Cscale1500 (CLEAN SCALE test: DRIVE trace toward ~1500, HOLD location@177 + orientation + eff_rank@~39 (rank-pin) -> uniform compression; does trace alone move captioning)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -174,21 +174,23 @@ run_one() {
 # threshold probe CANCELED (low value now). Location proven.
 # run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
 
-# --- SCALE (TRACE) ISOLATION TEST (ACTIVE) -- step A of the single-axis program ---
-# Move ONE axis = TRACE. Hold LOCATION (loc-pin lambda_p=10 @debut 177) + ORIENTATION
-# (no InfoNCE, lambda=0). DRIVE trace DOWN by setting the scale-pin TARGET below baseline:
-# --btrace0 2000 (vs auto ~4767) => L_scale=(btrace/2000-1)^2 compresses toward ~2000.
-# This is the C3pin recipe with a LOW scale target -- reuses 18_train, NO code change.
-# ANSWERS: at FIXED debut location, does compressing trace help or hurt captioning?
-# (Rank not pinned yet -> MEASURE eff_rank; the rank knob is step B, built next.)
-# WATCH: btrace descends toward ~2000 (if it plateaus >3000, bump --lambda-s next run);
-# G_mu HELD ~177 (loc-pin); q16 ~0.05 (no InfoNCE). Baseline to compare = C3pin (177, trace 4312).
-run_one Cscale2000  stage2_vlm_Cscale2000.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 2000
+# --- SCALE (TRACE) ISOLATION DOSE-RESPONSE (ACTIVE) -- step A, rank now PINNED (step B) ---
+# CLEAN SCALE dose-response (step B built -> rank PINNED). Move ONE axis = TRACE, sweep
+# the target DOWN (interpretation = the CURVE, not one point). Rank/location/orientation
+# held at every point. NOTE btrace0 is a TARGET (drives+holds), not a cap; extreme targets
+# blow up the (b/t-1)^2 loss (t=500 -> loss ~72 >> AR ~3), so sweep CONTROLLED targets and
+# PLOT CLIP vs MEASURED trace. Start STRONG (1500, near C5p's 1723) to see the low-trace end.
+#   --btrace0 1500     drive trace 4767 -> ~1500 (settles at AR/rank floor; watch measured)
+#   --lambda-p 10      HOLD location @debut 177
+#   --lambda 0.0       HOLD orientation (no InfoNCE)
+#   --lambda-rank 1.0  HOLD eff_rank at auto-baseline ~39 (participation ratio, scale-invariant)
+# Baseline to compare = C3pin (177, trace 4312, rank 32). Then fill in targets 2500 / 3500.
+run_one Cscale1500  stage2_vlm_Cscale1500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 1500 --lambda-rank 1.0
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_Cscale2000.pt\`
-Gap: \`outputs/metrics/gap_Cscale2000.json\`  Captions + CLIPScore done.
-CHECK: trace DROPPED toward ~2000, G_mu HELD ~177, q16 ~0.05. vs C3pin(177,trace4312): does CLIP move?
-Reference: lambda_d 0.1 held 4792, 0.9 compressed to 3006. 0.3 locates the trace-hold cliff."
+Checkpoint: \`stage2_vlm_Cscale1500.pt\`
+Gap: \`outputs/metrics/gap_Cscale1500.json\`  Captions + CLIPScore done.
+CHECK: trace DROPPED toward ~1500 (plot vs MEASURED), G_mu HELD ~177, eff_rank HELD ~39 (rank-pin), q16 ~0.05.
+vs C3pin (177, trace 4312, rank 32): does CLIP move? Then sweep targets 2500 / 3500 for the curve."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -63,6 +63,8 @@ def train_stage2_orientation_pinned(
     pool: str = "cls",
     mu_x0: Optional[torch.Tensor] = None,
     btrace0: Optional[float] = None,
+    lambda_r: float = 0.0,
+    effrank0: Optional[float] = None,
     max_steps: Optional[int] = None,
     progress_cb: Optional[Callable[[int, float, float], None]] = None,
     resume_from: Optional[Path] = None,
@@ -97,6 +99,7 @@ def train_stage2_orientation_pinned(
         raise ValueError(f"pool must be 'cls' or 'all257', got {pool!r}")
     use_loc_pin = lambda_p > 0.0
     use_scale_pin = lambda_s > 0.0
+    use_rank_pin = lambda_r > 0.0
     if use_loc_pin and mu_x0 is not None:
         mu_x0 = mu_x0.to(device=device, dtype=torch.float32).detach()
         if mu_x0.ndim != 1:
@@ -105,6 +108,10 @@ def train_stage2_orientation_pinned(
         btrace0 = float(btrace0)
         if btrace0 <= 0:
             raise ValueError(f"btrace0 must be positive, got {btrace0}")
+    if use_rank_pin and effrank0 is not None:
+        effrank0 = float(effrank0)
+        if effrank0 <= 0:
+            raise ValueError(f"effrank0 must be positive, got {effrank0}")
 
     # ----- freeze / trainable setup (identical to Stage 2 / C4) -----
     if cfg["freeze"].get("vit", True):
@@ -152,6 +159,9 @@ def train_stage2_orientation_pinned(
     if use_scale_pin:
         b0 = f"{btrace0:.1f}" if btrace0 is not None else "auto@step1"
         pin_msg += f"  scale-pin lambda_s={lambda_s} btrace0={b0}"
+    if use_rank_pin:
+        r0 = f"{effrank0:.2f}" if effrank0 is not None else "auto@step1"
+        pin_msg += f"  rank-pin lambda_r={lambda_r} effrank0={r0}"
     console.log(
         f"[c6] trainable params: {n_trainable / 1e6:.2f}M  "
         f"(convex lambda_o={lambda_contrastive}, pool={pool}, trace_x={trace_x:.1f}){pin_msg}"
@@ -209,7 +219,7 @@ def train_stage2_orientation_pinned(
     # convex weights (matches C4's non-Kendall path).
     w_ar = 1.0 - lambda_contrastive
 
-    diag = {"loc_drift": 0.0, "btrace": 0.0}
+    diag = {"loc_drift": 0.0, "btrace": 0.0, "effrank": 0.0}
 
     def _contrastive_step():
         """One InfoNCE forward on a fresh contrastive batch (no LLaMA body),
@@ -219,7 +229,7 @@ def train_stage2_orientation_pinned(
         Returns ``(l_nce, l_loc, l_scale)``; ``l_loc``/``l_scale`` are ``None``
         unless their pin is active.
         """
-        nonlocal mu_x0, btrace0
+        nonlocal mu_x0, btrace0, effrank0
         cbatch = next(contrastive_iter)
         with torch.no_grad():
             vis = vlm.encoder.encode_image_tokens(cbatch["images"])   # (B,257,1024)
@@ -243,7 +253,8 @@ def train_stage2_orientation_pinned(
         # (it normalises); these pins act on the un-normalised mean / spread.
         zf = z_img.float()
         zbar = zf.mean(dim=0)                                          # (4096,)
-        l_loc = l_scale = None
+        zc = zf - zbar                                                 # (B,4096) centered cloud
+        l_loc = l_scale = l_rank = None
         if use_loc_pin:
             if mu_x0 is None:
                 # first contrastive step: connector still C2-init -> baseline
@@ -258,7 +269,7 @@ def train_stage2_orientation_pinned(
         else:
             diag["loc_drift"] = 0.0
         if use_scale_pin:
-            btrace = ((zf - zbar) ** 2).sum(dim=1).mean()
+            btrace = (zc ** 2).sum(dim=1).mean()
             if btrace0 is None:
                 btrace0 = float(btrace.detach())
                 console.log(f"[c6] scale-pin: captured btrace0={btrace0:.1f} (C2-init CLS spread)")
@@ -266,14 +277,30 @@ def train_stage2_orientation_pinned(
             diag["btrace"] = float(btrace.detach())
         else:
             with torch.no_grad():
-                diag["btrace"] = float(((zf - zbar) ** 2).sum(dim=1).mean())
-        return l_nce, l_loc, l_scale
+                diag["btrace"] = float((zc ** 2).sum(dim=1).mean())
+        # Participation-ratio effective rank PR = tr(G)^2 / ||G||_F^2 of the B x B
+        # centered Gram G = zc @ zc^T. SCALE-INVARIANT (rescaling zc leaves PR unchanged),
+        # so the rank pin moves anisotropy ORTHOGONALLY to the scale pin. This is exactly
+        # the quantity 03_compute_gap reports as eff_rank_image. Cheap: B x B, no D x D cov.
+        if use_rank_pin:
+            G = zc @ zc.t()                                            # (B,B)
+            pr = torch.diagonal(G).sum() ** 2 / (G * G).sum().clamp_min(1e-12)
+            if effrank0 is None:
+                effrank0 = float(pr.detach())
+                console.log(f"[c6] rank-pin: captured effrank0={effrank0:.2f} (C2-init participation ratio)")
+            l_rank = (pr / effrank0 - 1.0) ** 2
+            diag["effrank"] = float(pr.detach())
+        else:
+            with torch.no_grad():
+                G = zc @ zc.t()
+                diag["effrank"] = float(torch.diagonal(G).sum() ** 2 / (G * G).sum().clamp_min(1e-12))
+        return l_nce, l_loc, l_scale, l_rank
 
-    run_contrastive = lambda_contrastive > 0.0 or use_loc_pin or use_scale_pin
+    run_contrastive = lambda_contrastive > 0.0 or use_loc_pin or use_scale_pin or use_rank_pin
 
     step = start_step
     done = False
-    last_nce = last_loc = last_scale = 0.0
+    last_nce = last_loc = last_scale = last_rank = 0.0
     for epoch in range(sched_cfg["num_epochs"]):
         if done:
             break
@@ -291,7 +318,7 @@ def train_stage2_orientation_pinned(
             if (micro_idx + 1) % accum == 0:
                 # --- orientation (+ pins) term: one fwd+bwd per optimizer step ---
                 if run_contrastive:
-                    l_nce, l_loc, l_scale = _contrastive_step()
+                    l_nce, l_loc, l_scale, l_rank = _contrastive_step()
                     last_nce = float(l_nce.detach())
                     geo = lambda_contrastive * l_nce
                     if l_loc is not None:
@@ -300,6 +327,9 @@ def train_stage2_orientation_pinned(
                     if l_scale is not None:
                         last_scale = float(l_scale.detach())
                         geo = geo + lambda_s * l_scale
+                    if l_rank is not None:
+                        last_rank = float(l_rank.detach())
+                        geo = geo + lambda_r * l_rank
                     geo.backward()
 
                 optimizer.step()
@@ -311,9 +341,10 @@ def train_stage2_orientation_pinned(
                     lr_now = scheduler.get_last_lr()[0]
                     loc_str = f"L_loc={last_loc:.4f} drift={diag['loc_drift']:.2f} " if use_loc_pin else ""
                     scale_str = f"L_scale={last_scale:.4f} " if use_scale_pin else ""
+                    rank_str = f"L_rank={last_rank:.4f} effrank={diag['effrank']:.1f} " if use_rank_pin else ""
                     console.log(
                         f"[c6] epoch={epoch} step={step}/{total_steps} "
-                        f"L_ar={out.loss.item():.4f} L_nce={last_nce:.4f} {loc_str}{scale_str}"
+                        f"L_ar={out.loss.item():.4f} L_nce={last_nce:.4f} {loc_str}{scale_str}{rank_str}"
                         f"lambda_o={lambda_contrastive:.3f} btrace={diag['btrace']:.1f} "
                         f"tau={temp.temperature:.4f} lr={lr_now:.2e}"
                     )
