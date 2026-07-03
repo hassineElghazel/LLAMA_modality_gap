@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: C5bp_lam0p01 (TRACE-HELD location sweep, high-G_mu end: distance lambda_d=0.01 + scale-pin lambda_s=1.0; expect G_mu ~130-160, btrace held ~4767)."
+Running: C5bp_lam0p3 (trace-hold THRESHOLD probe: distance lambda_d=0.3 + scale-pin lambda_s=1.0; location saturates ~G_mu 25-30, WATCH whether btrace holds ~4767 or compresses)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -178,17 +178,20 @@ run_one() {
 # btrace 4767->3006 (-37%). So trace-held closure lives at LOW lambda_d. At low lambda_d
 # the pin wins and trace holds (lambda_d=0.1 held btrace 4792). Weaker lambda_d = less
 # closure = higher G_mu with trace held. Run ONE per job; PLOT vs MEASURED G_mu.
-# Now: lambda_d=0.01 (the high-G_mu, trace-held end; expect G_mu ~130-160, btrace ~4767).
-run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
-# staged (uncomment one per job) -- fill the trace-held curve between 0.01 and 0.1:
+# DONE: lambda_d=0.01 -> G_mu 81, btrace HELD 4788, CLIP 0.624 (trace-held intermediate point).
+# run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
+# Now: lambda_d=0.3 -- maps the trace-hold THRESHOLD (0.1 held 4792, 0.9 compressed 3006 -37%).
+# Location expected to SATURATE ~G_mu 25-30 (no new location point); WATCH btrace: held =>
+# matched-location trace contrast vs C5bp_lam0p1; compressed => mid-compression point at fixed loc.
+run_one C5bp_lam0p3   stage2_vlm_C5bp_lam0p3.pt   17_train_c5_distance.py  --pool all257 --lambda-d 0.3  --lambda-s 1.0
+# staged trace-held fill (uncomment one per job): 0.02 (~G_mu 110), 0.05 (~G_mu 55):
 # run_one C5bp_lam0p02  stage2_vlm_C5bp_lam0p02.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.02 --lambda-s 1.0
 # run_one C5bp_lam0p05  stage2_vlm_C5bp_lam0p05.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.05 --lambda-s 1.0
-# ABANDONED (trace compresses, does not close further): lambda_d 0.3 / 0.5 / 0.7 / 0.9.
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_C5bp_lam0p01.pt\`
-Gap: \`outputs/metrics/gap_C5bp_lam0p01.json\`  Captions + CLIPScore done.
-CHECK: btrace HELD ~4767 (trace NOT compressed) AND G_mu only partially closed (~130-160); eff_rank ~baseline.
-Sweep: trace-held curve = {0.01 (this), 0.02, 0.05, 0.1 done}; plot CLIPScore/CHAIR vs MEASURED G_mu."
+Checkpoint: \`stage2_vlm_C5bp_lam0p3.pt\`
+Gap: \`outputs/metrics/gap_C5bp_lam0p3.json\`  Captions + CLIPScore done.
+CHECK: G_mu (expect saturated ~25-30) and btrace -- threshold probe: HELD ~4767 or COMPRESSED (<4000)?
+Reference: lambda_d 0.1 held 4792, 0.9 compressed to 3006. 0.3 locates the trace-hold cliff."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
