@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: C3pinr (rank-matched ANCHOR for the trace sweep = C3pin + rank-pin: HOLD location@177 + trace@baseline + eff_rank@~39 + orientation; the uncompressed top of the trace curve)."
+Running: C3pinr (CORRECT fully-pinned baseline = C3pin + rank-pin: hold loc@177 + trace@baseline + eff_rank@~39 + orientation. Reference for the rank test (RUN 2 = Crank15) and the trace sweep)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -181,19 +181,25 @@ run_one() {
 # G_mu 177.7, q16 0.044 -> single-axis TRACE move validated (rank pin works). Awaiting CLIPScore.
 # run_one Cscale1500  stage2_vlm_Cscale1500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 1500 --lambda-rank 1.0
 #
-# ACTIVE = C3pinr: the rank-matched ANCHOR (top of the trace curve, uncompressed). C3pin's
-# recipe + the rank-pin, NO --btrace0 so the scale-pin HOLDS trace at baseline. Everything held
-# at the C2 debut: location 177 + trace ~4700 + rank ~39 + orientation ~0.05. This is the correct
-# baseline for the scale sweep -- C3pin itself has rank 32 (unpinned), NOT rank-matched to Cscale.
+# === CORRECT BASELINE + SINGLE-AXIS TESTS (fully-pinned family) ===
+# C3pin is NOT a valid baseline: its rank drifted UNPINNED to 32, so comparing to it mixes rank
+# with "pin absent vs present". The correct reference is C3pinr: ALL FOUR axes pinned at the C2
+# debut (loc 177, trace ~4700, rank ~39, orient ~0.05). Every single-axis test moves ONE axis
+# from it with the SAME machinery both ends -> clean contrast. Rank test = 2 runs (no 1-run shortcut).
+#
+# RUN 1 (ACTIVE) = C3pinr: the fully-pinned baseline (doubles as the trace-sweep anchor).
 run_one C3pinr  stage2_vlm_C3pinr.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0
-# staged compressed points (uncomment one per job) -- fill the rank-matched trace curve:
+# RUN 2 = Crank15: SAME recipe + --effrank0 15 -> moves ONLY rank (39 -> ~15); trace/loc/orient
+# held identically to C3pinr. C3pinr vs Crank15 = clean rank contrast (both fully pinned).
+# run_one Crank15  stage2_vlm_Crank15.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0 --effrank0 15
+# staged (trace curve, later; all vs C3pinr): add --btrace0 3500 / 2500 to the C3pinr recipe.
 # run_one Cscale3500  stage2_vlm_Cscale3500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 3500 --lambda-rank 1.0
 # run_one Cscale2500  stage2_vlm_Cscale2500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 2500 --lambda-rank 1.0
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
 Checkpoint: \`stage2_vlm_C3pinr.pt\`
 Gap: \`outputs/metrics/gap_C3pinr.json\`  Captions + CLIPScore done.
-CHECK (rank-matched ANCHOR): G_mu ~177, trace HELD ~4700 (baseline), eff_rank HELD ~39, q16 ~0.05.
-This is the trace-curve top point; Cscale1500 (trace 1488, rank 39) is the bottom. Then fill 3500/2500."
+CHECK (fully-pinned baseline): G_mu ~177, trace HELD ~4700, eff_rank HELD ~39, q16 ~0.05.
+This is the correct reference. NEXT run = Crank15 (same recipe + --effrank0 15) -> rank contrast vs this."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
