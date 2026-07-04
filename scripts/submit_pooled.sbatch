@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: Cscale1500 (CLEAN SCALE test: DRIVE trace toward ~1500, HOLD location@177 + orientation + eff_rank@~39 (rank-pin) -> uniform compression; does trace alone move captioning)."
+Running: C3pinr (rank-matched ANCHOR for the trace sweep = C3pin + rank-pin: HOLD location@177 + trace@baseline + eff_rank@~39 + orientation; the uncompressed top of the trace curve)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -174,23 +174,26 @@ run_one() {
 # threshold probe CANCELED (low value now). Location proven.
 # run_one C5bp_lam0p01  stage2_vlm_C5bp_lam0p01.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.01 --lambda-s 1.0
 
-# --- SCALE (TRACE) ISOLATION DOSE-RESPONSE (ACTIVE) -- step A, rank now PINNED (step B) ---
-# CLEAN SCALE dose-response (step B built -> rank PINNED). Move ONE axis = TRACE, sweep
-# the target DOWN (interpretation = the CURVE, not one point). Rank/location/orientation
-# held at every point. NOTE btrace0 is a TARGET (drives+holds), not a cap; extreme targets
-# blow up the (b/t-1)^2 loss (t=500 -> loss ~72 >> AR ~3), so sweep CONTROLLED targets and
-# PLOT CLIP vs MEASURED trace. Start STRONG (1500, near C5p's 1723) to see the low-trace end.
-#   --btrace0 1500     drive trace 4767 -> ~1500 (settles at AR/rank floor; watch measured)
-#   --lambda-p 10      HOLD location @debut 177
-#   --lambda 0.0       HOLD orientation (no InfoNCE)
-#   --lambda-rank 1.0  HOLD eff_rank at auto-baseline ~39 (participation ratio, scale-invariant)
-# Baseline to compare = C3pin (177, trace 4312, rank 32). Then fill in targets 2500 / 3500.
-run_one Cscale1500  stage2_vlm_Cscale1500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 1500 --lambda-rank 1.0
+# --- SCALE (TRACE) ISOLATION DOSE-RESPONSE: rank PINNED (step B) ---
+# All points at location 177 + rank ~39 (pinned) + orientation ~0.05; only TRACE varies ->
+# a rank-matched trace curve. PLOT CLIP vs MEASURED trace.
+# Cscale1500 DONE: clean uniform compression -- trace 4312->1488 (-65%), rank HELD 38.67,
+# G_mu 177.7, q16 0.044 -> single-axis TRACE move validated (rank pin works). Awaiting CLIPScore.
+# run_one Cscale1500  stage2_vlm_Cscale1500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 1500 --lambda-rank 1.0
+#
+# ACTIVE = C3pinr: the rank-matched ANCHOR (top of the trace curve, uncompressed). C3pin's
+# recipe + the rank-pin, NO --btrace0 so the scale-pin HOLDS trace at baseline. Everything held
+# at the C2 debut: location 177 + trace ~4700 + rank ~39 + orientation ~0.05. This is the correct
+# baseline for the scale sweep -- C3pin itself has rank 32 (unpinned), NOT rank-matched to Cscale.
+run_one C3pinr  stage2_vlm_C3pinr.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0
+# staged compressed points (uncomment one per job) -- fill the rank-matched trace curve:
+# run_one Cscale3500  stage2_vlm_Cscale3500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 3500 --lambda-rank 1.0
+# run_one Cscale2500  stage2_vlm_Cscale2500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 2500 --lambda-rank 1.0
 
 tg_notify "✅ *POOLED complete* (job \`${SLURM_JOB_ID}\`)
-Checkpoint: \`stage2_vlm_Cscale1500.pt\`
-Gap: \`outputs/metrics/gap_Cscale1500.json\`  Captions + CLIPScore done.
-CHECK: trace DROPPED toward ~1500 (plot vs MEASURED), G_mu HELD ~177, eff_rank HELD ~39 (rank-pin), q16 ~0.05.
-vs C3pin (177, trace 4312, rank 32): does CLIP move? Then sweep targets 2500 / 3500 for the curve."
+Checkpoint: \`stage2_vlm_C3pinr.pt\`
+Gap: \`outputs/metrics/gap_C3pinr.json\`  Captions + CLIPScore done.
+CHECK (rank-matched ANCHOR): G_mu ~177, trace HELD ~4700 (baseline), eff_rank HELD ~39, q16 ~0.05.
+This is the trace-curve top point; Cscale1500 (trace 1488, rank 39) is the bottom. Then fill 3500/2500."
 
 echo "[slurm] POOLED complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"

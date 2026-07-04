@@ -36,7 +36,9 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # trace-held (low-lambda_d) points -- the clean location curve:
               "C5bp_lam0p05", "C5bp_lam0p02", "C5bp_lam0p01",
               # single-axis SCALE dose-response: hold loc@177 + rank + no InfoNCE, drive trace to targets:
-              "Cscale1500", "Cscale2500", "Cscale3500")
+              "Cscale1500", "Cscale2500", "Cscale3500",
+              # C3pinr = C3pin + rank-pin: rank-matched anchor (trace held at baseline, rank ~39):
+              "C3pinr")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:

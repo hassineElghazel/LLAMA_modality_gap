@@ -74,6 +74,8 @@ CONDITIONS = {
     "Cscale1500":  {"connector": "outputs/checkpoints/stage2_vlm_Cscale1500.pt",  "uses_stage2": True},
     "Cscale2500":  {"connector": "outputs/checkpoints/stage2_vlm_Cscale2500.pt",  "uses_stage2": True},
     "Cscale3500":  {"connector": "outputs/checkpoints/stage2_vlm_Cscale3500.pt",  "uses_stage2": True},
+    # C3pinr = C3pin + rank-pin: rank-matched anchor (trace held at baseline, rank ~39).
+    "C3pinr":      {"connector": "outputs/checkpoints/stage2_vlm_C3pinr.pt",      "uses_stage2": True},
     # C4bp: pooled InfoNCE + location-pin + scale-pin -> isolate ORIENTATION (mirror
     # of C5bp: hold location AND scale, let InfoNCE rotate only).
     "C4bp_lam0p1": {"connector": "outputs/checkpoints/stage2_vlm_C4bp_lam0p1.pt", "uses_stage2": True},
