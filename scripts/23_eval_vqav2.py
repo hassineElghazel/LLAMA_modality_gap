@@ -143,22 +143,45 @@ def main():
         rows = rows[: args.num_questions]
 
     image_root = Path(args.image_root)
-    vlm = _build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
-    gen_kwargs = {"do_sample": False, "num_beams": 1, "max_new_tokens": 10}
+
+    # ---- resume: incremental JSONL of per-question predictions ----
+    preds_path = Path("outputs/predictions") / f"vqav2_{args.condition}.jsonl"
+    preds_path.parent.mkdir(parents=True, exist_ok=True)
+    preds_store = {}
+    if preds_path.exists():
+        for line in preds_path.open():
+            try:
+                r = json.loads(line); preds_store[r["qid"]] = r["pred"]
+            except Exception:
+                pass
+    todo = [q for q in rows if q["question_id"] not in preds_store]
+    print(f"[vqav2] resume: {len(preds_store)} done, {len(todo)} to do")
+
+    if todo:
+        vlm = _build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
+        gen_kwargs = {"do_sample": False, "num_beams": 1, "max_new_tokens": 10}
+        with torch.no_grad(), preds_path.open("a") as fout:
+            for i in tqdm(range(0, len(todo), args.batch_size), desc=f"vqav2 {args.condition}"):
+                batch = todo[i:i + args.batch_size]
+                images = [load_image(image_root / f"{q['image_id']:012d}.jpg") for q in batch]
+                prompts = [_format_prompt(PROMPT.format(q=q["question"])) for q in batch]
+                preds = vlm.generate(images, prompts, **gen_kwargs)
+                for q, pred in zip(batch, preds):
+                    preds_store[q["question_id"]] = pred.strip()
+                    fout.write(json.dumps({"qid": q["question_id"], "pred": pred.strip()}) + "\n")
+                fout.flush()
+    else:
+        print(f"[vqav2] {args.condition} already complete -> re-scoring only")
 
     total = 0.0
     n = 0
-    with torch.no_grad():
-        for i in tqdm(range(0, len(rows), args.batch_size), desc=f"vqav2 {args.condition}"):
-            batch = rows[i:i + args.batch_size]
-            images = [load_image(image_root / f"{q['image_id']:012d}.jpg") for q in batch]
-            prompts = [_format_prompt(PROMPT.format(q=q["question"])) for q in batch]
-            preds = vlm.generate(images, prompts, **gen_kwargs)
-            for q, pred in zip(batch, preds):
-                gt = [a["answer"] for a in anns[q["question_id"]]["answers"]]
-                total += vqa_accuracy(pred, gt)
-                n += 1
-
+    for q in rows:
+        pred = preds_store.get(q["question_id"])
+        if pred is None:
+            continue
+        gt = [a["answer"] for a in anns[q["question_id"]]["answers"]]
+        total += vqa_accuracy(pred, gt)
+        n += 1
     acc = total / n if n else 0.0
     out = Path(args.out_dir) / f"vqav2_{args.condition}.json"
     out.parent.mkdir(parents=True, exist_ok=True)

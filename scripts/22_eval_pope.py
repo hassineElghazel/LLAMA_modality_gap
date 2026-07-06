@@ -104,6 +104,8 @@ def build_pope(instances_path: Path, image_root: Path, n_images: int, k: int, se
         for sp, negs in (("random", neg_random), ("popular", neg_pop), ("adversarial", neg_adv)):
             for obj in negs:
                 Q.append(dict(image_id=iid, file=file_of[iid], obj=obj, label=0, split=sp))
+    for q in Q:
+        q["qid"] = f"{q['image_id']}_{q['obj']}_{q['split']}"
     rng.shuffle(Q)
     return Q, imgs
 
@@ -160,20 +162,38 @@ def main():
     Q, imgs = build_pope(Path(args.instances), image_root, args.num_images, args.k, args.seed)
     print(f"[pope] {len(imgs)} val2017 images (clean, NOT in train2017) | {len(Q)} questions")
 
-    vlm = _build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
-    gen_kwargs = {"do_sample": False, "num_beams": 1, "max_new_tokens": 8}
+    # ---- resume: incremental JSONL of per-question predictions ----
+    preds_path = Path("outputs/predictions") / f"pope_{args.condition}.jsonl"
+    preds_path.parent.mkdir(parents=True, exist_ok=True)
+    done, recs = set(), []
+    if preds_path.exists():
+        for line in preds_path.open():
+            try:
+                r = json.loads(line); done.add(r["qid"]); recs.append(r)
+            except Exception:
+                pass
+    todo = [q for q in Q if q["qid"] not in done]
+    print(f"[pope] resume: {len(done)} done, {len(todo)} to do")
 
-    with torch.no_grad():
-        for i in tqdm(range(0, len(Q), args.batch_size), desc=f"pope {args.condition}"):
-            batch = Q[i:i + args.batch_size]
-            images = [load_image(image_root / r["file"]) for r in batch]
-            prompts = [_format_prompt(PROMPT.format(obj=r["obj"])) for r in batch]
-            ans = vlm.generate(images, prompts, **gen_kwargs)
-            for r, a in zip(batch, ans):
-                r["answer"] = a.strip()
-                r["pred"] = parse_yes(a)
+    if todo:
+        vlm = _build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
+        gen_kwargs = {"do_sample": False, "num_beams": 1, "max_new_tokens": 8}
+        with torch.no_grad(), preds_path.open("a") as fout:
+            for i in tqdm(range(0, len(todo), args.batch_size), desc=f"pope {args.condition}"):
+                batch = todo[i:i + args.batch_size]
+                images = [load_image(image_root / r["file"]) for r in batch]
+                prompts = [_format_prompt(PROMPT.format(obj=r["obj"])) for r in batch]
+                ans = vlm.generate(images, prompts, **gen_kwargs)
+                for r, a in zip(batch, ans):
+                    rec = {"qid": r["qid"], "label": r["label"], "split": r["split"],
+                           "answer": a.strip(), "pred": parse_yes(a)}
+                    recs.append(rec)
+                    fout.write(json.dumps(rec) + "\n")
+                fout.flush()
+    else:
+        print(f"[pope] {args.condition} already complete -> re-scoring only")
 
-    metrics = score(Q)
+    metrics = score(recs)
     out = Path(args.out_dir) / f"pope_{args.condition}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"condition": args.condition, "gt_split": "coco_val2017",

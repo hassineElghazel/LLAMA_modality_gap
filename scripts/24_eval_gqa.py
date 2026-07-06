@@ -135,21 +135,38 @@ def main():
     print(f"[gqa] evaluating {len(rows)} questions")
 
     image_root = Path(args.image_root)
-    vlm = _build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
-    gen_kwargs = {"do_sample": False, "num_beams": 1, "max_new_tokens": 10}
 
-    n_correct = 0
-    n = 0
-    with torch.no_grad():
-        for i in tqdm(range(0, len(rows), args.batch_size), desc=f"gqa {args.condition}"):
-            batch = rows[i:i + args.batch_size]
-            images = [load_image(image_root / f"{r['imageId']}.jpg") for r in batch]
-            prompts = [_format_prompt(PROMPT.format(q=r["question"])) for r in batch]
-            preds = vlm.generate(images, prompts, **gen_kwargs)
-            for r, pred in zip(batch, preds):
-                n_correct += int(correct(pred, r["answer"]))
-                n += 1
+    # ---- resume: incremental JSONL of per-question predictions ----
+    preds_path = Path("outputs/predictions") / f"gqa_{args.condition}.jsonl"
+    preds_path.parent.mkdir(parents=True, exist_ok=True)
+    preds_store = {}
+    if preds_path.exists():
+        for line in preds_path.open():
+            try:
+                r = json.loads(line); preds_store[r["qid"]] = (r["pred"], r["gt"])
+            except Exception:
+                pass
+    todo = [r for r in rows if r["qid"] not in preds_store]
+    print(f"[gqa] resume: {len(preds_store)} done, {len(todo)} to do")
 
+    if todo:
+        vlm = _build_vlm(args.vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg)
+        gen_kwargs = {"do_sample": False, "num_beams": 1, "max_new_tokens": 10}
+        with torch.no_grad(), preds_path.open("a") as fout:
+            for i in tqdm(range(0, len(todo), args.batch_size), desc=f"gqa {args.condition}"):
+                batch = todo[i:i + args.batch_size]
+                images = [load_image(image_root / f"{r['imageId']}.jpg") for r in batch]
+                prompts = [_format_prompt(PROMPT.format(q=r["question"])) for r in batch]
+                preds = vlm.generate(images, prompts, **gen_kwargs)
+                for r, pred in zip(batch, preds):
+                    preds_store[r["qid"]] = (pred.strip(), r["answer"])
+                    fout.write(json.dumps({"qid": r["qid"], "pred": pred.strip(), "gt": r["answer"]}) + "\n")
+                fout.flush()
+    else:
+        print(f"[gqa] {args.condition} already complete -> re-scoring only")
+
+    n_correct = sum(int(correct(p, g)) for p, g in preds_store.values())
+    n = len(preds_store)
     acc = n_correct / n if n else 0.0
     out = Path(args.out_dir) / f"gqa_{args.condition}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
