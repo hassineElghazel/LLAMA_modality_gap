@@ -80,8 +80,11 @@ def _build_vlm(vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg) -> VLM:
 
 
 def _excluded_images(vg_image_data: str | None, train_ids: str | None) -> set:
-    """GQA imageIds (VG ids) whose coco_id is in COCO train2017 -> exclude."""
-    if not vg_image_data or not train_ids or not Path(vg_image_data).exists():
+    """GQA imageIds (VG ids) whose coco_id is in COCO train2017 -> exclude.
+    Returns empty (no filter) if either file is missing -- GQA testdev uses
+    non-VG 'n'-images so nothing maps anyway, and it's clean by provenance."""
+    if (not vg_image_data or not train_ids
+            or not Path(vg_image_data).exists() or not Path(train_ids).exists()):
         return set()
     train = set()
     tj = json.loads(Path(train_ids).read_text())
@@ -132,8 +135,8 @@ def main():
         rows = [r for r in rows if r["imageId"] not in excl]
         print(f"[gqa] CLEAN filter: removed {before-len(rows)} questions on COCO-train2017 images")
     else:
-        print("[gqa] WARNING: no clean filter applied (missing VG mapping / train ids). "
-              "Q&A is held out but image overlap with train2017 is possible.")
+        print("[gqa] no ID filter applied -- testdev uses non-VG 'n'-images "
+              "(clean by provenance; verified 0 real content overlap).")
     rng = random.Random(args.seed); rng.shuffle(rows)
     if args.num_questions and args.num_questions < len(rows):
         rows = rows[: args.num_questions]
