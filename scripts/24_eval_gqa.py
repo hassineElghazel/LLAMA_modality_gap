@@ -44,8 +44,13 @@ def norm(s: str) -> str:
 
 
 def correct(pred: str, gt: str) -> bool:
-    p, g = norm(pred), norm(gt)
-    return g == p or (g and g in p.split())
+    """GQA official = exact match on the normalized answer. We take the model's
+    first line (in case it over-generates) and allow a trailing clause after the
+    exact answer phrase (e.g. gt 'dog' vs 'dog on the couch'), but NOT a mere
+    substring match anywhere (which would over-credit)."""
+    p = norm(pred.split("\n")[0])
+    g = norm(gt)
+    return p == g or (bool(g) and p.startswith(g + " "))
 
 
 def _build_vlm(vlm_checkpoint, enc_cfg, proj_cfg, llm_cfg, lora_cfg) -> VLM:
