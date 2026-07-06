@@ -95,7 +95,7 @@ grep -q use_safetensors scripts/15_clipscore.py || \
 
 tg_notify "🚀 *POOLED started* (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)
 Geometry term on pooled-257 (control==measurement), init from C2, 450 steps.
-Running: Crank15 (single-axis RANK test = C3pinr recipe + --effrank0 15: hold loc@177 + trace@baseline + orientation, drive ONLY eff_rank 39 -> ~15. Compared against C3pinr baseline)."
+Running: Cloc (CLEAN-LOCATION = distance drive + scale-pin + rank-pin: close G_mu while holding trace AND eff_rank + orientation. Isolates LOCATION with the other 3 axes pinned -> assumption-free causality. Read vs C3pinr; cross-check vs C5bp)."
 
 # train (450 steps) -> extract -> gap -> caption -> score -> clipscore.
 # train_script ($3) differs per arm (C5p uses 17_..., C4p uses 14_...).
@@ -191,7 +191,13 @@ run_one() {
 # run_one C3pinr  stage2_vlm_C3pinr.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0
 # RUN 2 (ACTIVE) = Crank15: SAME recipe + --effrank0 15 -> moves ONLY rank (39 -> ~15); trace/loc/orient
 # held identically to C3pinr. C3pinr vs Crank15 = clean rank contrast (both fully pinned).
-run_one Crank15  stage2_vlm_Crank15.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0 --effrank0 15
+# DONE: Crank15 -> shape/rank INERT (eff_rank 37->20, CLIP flat). Causal table complete except clean-location.
+# run_one Crank15  stage2_vlm_Crank15.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0 --effrank0 15
+# ACTIVE = Cloc: CLEAN-LOCATION run = distance drive (close G_mu) + scale-pin + rank-pin
+# (hold trace AND eff_rank, orientation held by no-InfoNCE). Isolates LOCATION with the
+# other 3 axes pinned -> assumption-free location causality (mirror of Cscale/Crank15).
+# Read vs C3pinr baseline; cross-check vs C5bp (same recipe WITHOUT the rank-pin).
+run_one Cloc  stage2_vlm_Cloc.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1 --lambda-s 1.0 --lambda-rank 1.0
 # staged (trace curve, later; all vs C3pinr): add --btrace0 3500 / 2500 to the C3pinr recipe.
 # run_one Cscale3500  stage2_vlm_Cscale3500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 3500 --lambda-rank 1.0
 # run_one Cscale2500  stage2_vlm_Cscale2500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 2500 --lambda-rank 1.0

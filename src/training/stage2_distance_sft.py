@@ -55,6 +55,8 @@ def train_stage2_distance(
     trace_x: float,
     lambda_s: float = 0.0,
     btrace0: Optional[float] = None,
+    lambda_r: float = 0.0,
+    effrank0: Optional[float] = None,
     pool: str = "cls",
     max_steps: Optional[int] = None,
     progress_cb: Optional[Callable[[int, float, float], None]] = None,
@@ -101,6 +103,15 @@ def train_stage2_distance(
         if btrace0 <= 0:
             raise ValueError(f"btrace0 must be positive, got {btrace0}")
 
+    # Rank pin (participation ratio of the centered batch cloud). Holds
+    # eff_rank at its baseline effrank0 so the distance term closes location
+    # WITHOUT the anisotropic squeeze that co-moves rank down in plain C5bp.
+    use_rank_pin = lambda_r > 0.0
+    if use_rank_pin and effrank0 is not None:
+        effrank0 = float(effrank0)
+        if effrank0 <= 0:
+            raise ValueError(f"effrank0 must be positive, got {effrank0}")
+
     # ----- freeze / trainable setup (identical to Stage 2 / C4) -----
     if cfg["freeze"].get("vit", True):
         freeze_module(vlm.encoder._vision)
@@ -138,6 +149,9 @@ def train_stage2_distance(
         pin_msg = f"  scale-pin lambda_s={lambda_s} btrace0={b0_str}"
     else:
         pin_msg = ""
+    if use_rank_pin:
+        r0_str = f"{effrank0:.2f}" if effrank0 is not None else "auto@step1"
+        pin_msg += f"  rank-pin lambda_r={lambda_r} effrank0={r0_str}"
     console.log(
         f"[c5] trainable params: {n_trainable / 1e6:.2f}M  "
         f"(convex lambda_d={lambda_d}, pool={pool}, trace_x={trace_x:.1f}){pin_msg}"
@@ -191,7 +205,7 @@ def train_stage2_distance(
     # convex weights (matches C4's non-Kendall path).
     w_ar = 1.0 - lambda_d
 
-    diag = {"gap": 0.0, "btrace": 0.0}
+    diag = {"gap": 0.0, "btrace": 0.0, "effrank": 0.0}
 
     def _distance_step():
         """One distance forward on a fresh image batch (no LLaMA body).
@@ -213,7 +227,7 @@ def train_stage2_distance(
                 z_img = vlm.projector(vis[:, 0, :])                   # CLS token (original)
         # Centroid + distance computed in fp32 for an accurate, well-conditioned
         # geometric term (gradient still flows back through z_img / connector).
-        nonlocal btrace0
+        nonlocal btrace0, effrank0
         zf = z_img.float()
         zbar = zf.mean(dim=0)                                         # (4096,)
         l_dist = ((zbar - mu_y) ** 2).sum() / trace_x
@@ -232,16 +246,32 @@ def train_stage2_distance(
             l_scale = None
             with torch.no_grad():
                 diag["btrace"] = float(((zf - zbar) ** 2).sum(dim=1).mean())
+        if use_rank_pin:
+            zc = zf - zbar                                            # (B,4096)
+            G = zc @ zc.t()                                           # (B,B) Gram
+            pr = torch.diagonal(G).sum() ** 2 / (G * G).sum().clamp_min(1e-12)
+            if effrank0 is None:
+                effrank0 = float(pr.detach())
+                console.log(f"[c5] rank-pin: captured effrank0={effrank0:.2f} (C2-init participation ratio)")
+            l_rank = (pr / effrank0 - 1.0) ** 2
+            diag["effrank"] = float(pr.detach())
+        else:
+            l_rank = None
+            with torch.no_grad():
+                zc = zf - zbar
+                G = zc @ zc.t()
+                diag["effrank"] = float(torch.diagonal(G).sum() ** 2 / (G * G).sum().clamp_min(1e-12))
         with torch.no_grad():
             diag["gap"] = float((zbar - mu_y).norm())
-        return l_dist, l_scale
+        return l_dist, l_scale, l_rank
 
-    run_distance = lambda_d > 0.0 or use_scale_pin
+    run_distance = lambda_d > 0.0 or use_scale_pin or use_rank_pin
 
     step = start_step
     done = False
     last_dist = 0.0
     last_scale = 0.0
+    last_rank = 0.0
     for epoch in range(sched_cfg["num_epochs"]):
         if done:
             break
@@ -259,12 +289,15 @@ def train_stage2_distance(
             if (micro_idx + 1) % accum == 0:
                 # --- distance (+ optional scale-pin) term: one fwd+bwd / step ---
                 if run_distance:
-                    l_dist, l_scale = _distance_step()
+                    l_dist, l_scale, l_rank = _distance_step()
                     last_dist = float(l_dist.detach())
                     geo = lambda_d * l_dist
                     if l_scale is not None:
                         last_scale = float(l_scale.detach())
                         geo = geo + lambda_s * l_scale
+                    if l_rank is not None:
+                        last_rank = float(l_rank.detach())
+                        geo = geo + lambda_r * l_rank
                     geo.backward()
 
                 optimizer.step()
@@ -275,9 +308,10 @@ def train_stage2_distance(
                 if step % log_every == 0:
                     lr_now = scheduler.get_last_lr()[0]
                     scale_str = f"L_scale={last_scale:.4f} " if use_scale_pin else ""
+                    rank_str = f"L_rank={last_rank:.4f} effrank={diag['effrank']:.1f} " if use_rank_pin else ""
                     console.log(
                         f"[c5] epoch={epoch} step={step}/{total_steps} "
-                        f"L_ar={out.loss.item():.4f} L_dist={last_dist:.4f} {scale_str}"
+                        f"L_ar={out.loss.item():.4f} L_dist={last_dist:.4f} {scale_str}{rank_str}"
                         f"lambda_d={lambda_d:.3f} gap={diag['gap']:.4f} "
                         f"btrace={diag['btrace']:.1f} lr={lr_now:.2e}"
                     )

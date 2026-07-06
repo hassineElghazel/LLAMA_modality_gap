@@ -126,6 +126,11 @@ def main():
                         "CLS spread at btrace0 (overrides config). 0 = plain C5")
     p.add_argument("--btrace0", type=float, default=None,
                    help="C5b baseline CLS spread to pin to (default: config/29282)")
+    p.add_argument("--lambda-rank", dest="lambda_r", type=float, default=None,
+                   help="rank-pin weight: + l_r*(pr/effrank0 - 1)^2 holds eff_rank "
+                        "(participation ratio) at effrank0. 0 = off (plain C5b)")
+    p.add_argument("--effrank0", type=float, default=None,
+                   help="baseline eff_rank to pin to (default: auto-measured at step 1)")
     p.add_argument("--pool", choices=["cls", "all257"], default=None,
                    help="image-side pooling for the distance term: 'cls' (token 0, "
                         "original) or 'all257' (mean of all 257 projected tokens = the "
@@ -160,6 +165,11 @@ def main():
         args.btrace0 if args.btrace0 is not None
         else d_cfg.get("btrace0")  # may be None when scale pin is off
     )
+    lambda_r = (
+        args.lambda_r if args.lambda_r is not None
+        else float(d_cfg.get("lambda_r", 0.0))
+    )
+    effrank0 = args.effrank0 if args.effrank0 is not None else d_cfg.get("effrank0")
     pool = args.pool if args.pool is not None else str(d_cfg.get("pool", "cls"))
 
     if args.output_name:
@@ -223,6 +233,9 @@ def main():
     if lambda_s > 0:
         b0 = f"{float(btrace0):.1f}" if btrace0 is not None else "auto@step1"
         pin = f" + scale-pin lambda_s={lambda_s} btrace0={b0}"
+    if lambda_r > 0:
+        r0 = f"{float(effrank0):.2f}" if effrank0 is not None else "auto@step1"
+        pin += f" + rank-pin lambda_r={lambda_r} effrank0={r0}"
     mode = f"convex lambda_d={lambda_d} pool={pool}{pin}"
     device_label = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     notify.send(
@@ -238,6 +251,8 @@ def main():
             trace_x=trace_x,
             lambda_s=lambda_s,
             btrace0=float(btrace0) if btrace0 is not None else None,
+            lambda_r=lambda_r,
+            effrank0=float(effrank0) if effrank0 is not None else None,
             pool=pool,
             max_steps=args.max_steps,
             resume_from=Path(args.resume) if args.resume else None,
@@ -248,7 +263,8 @@ def main():
     notify.send(f"[C5] training complete ({mode}) — checkpoint {ckpt}")
     snapshot_run_metadata(
         {"c5": cfg, "args": vars(args), "lambda_d": lambda_d,
-         "lambda_s": lambda_s, "btrace0": btrace0, "pool": pool, "trace_x": trace_x},
+         "lambda_s": lambda_s, "btrace0": btrace0, "lambda_r": lambda_r,
+         "effrank0": effrank0, "pool": pool, "trace_x": trace_x},
         Path(cfg["output"]["log_dir"]),
     )
     print(f"[ok] C5 VLM checkpoint: {ckpt}")

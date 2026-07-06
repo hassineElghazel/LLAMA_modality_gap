@@ -40,7 +40,10 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # C3pinr = C3pin + rank-pin: rank-matched anchor (trace held at baseline, rank ~39):
               "C3pinr",
               # Crank15 = single-axis RANK test: match C3pin loc+trace+orient, drive eff_rank down:
-              "Crank15")
+              "Crank15",
+              # Cloc = clean-location: distance drive + scale-pin + rank-pin (isolate LOCATION,
+              # hold scale AND rank) -> assumption-free location causality.
+              "Cloc")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:
