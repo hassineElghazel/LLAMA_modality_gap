@@ -197,7 +197,15 @@ run_one() {
 # (hold trace AND eff_rank, orientation held by no-InfoNCE). Isolates LOCATION with the
 # other 3 axes pinned -> assumption-free location causality (mirror of Cscale/Crank15).
 # Read vs C3pinr baseline; cross-check vs C5bp (same recipe WITHOUT the rank-pin).
-run_one Cloc  stage2_vlm_Cloc.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1 --lambda-s 1.0 --lambda-rank 1.0
+# DONE: Cloc -> clean-location isolation (G_mu 178->31, trace+rank+orient held, CLIP 0.6325 == C5bp).
+# Location causal, assumption-free.
+# run_one Cloc  stage2_vlm_Cloc.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1 --lambda-s 1.0 --lambda-rank 1.0
+# ACTIVE = Corient: CLEAN-ORIENTATION run = InfoNCE drive (lambda_o=0.9) + location-pin +
+# scale-pin + rank-pin. Moves ONLY orientation (q16 up ~3x) with location/scale/rank held ->
+# clean single-axis isolation (mirror of Cloc/Cscale/Crank15). Read vs C3pinr; expect INERT
+# (confirms C4bp_lam0p9 0.589==C3pin, now with rank held). Caveat: lambda_o=0.9 -> AR weight 0.1
+# (empirically negligible: C4bp AR=0.1 matched C3pin AR=1.0 at CLIP 0.589).
+run_one Corient  stage2_vlm_Corient.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.9 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0
 # staged (trace curve, later; all vs C3pinr): add --btrace0 3500 / 2500 to the C3pinr recipe.
 # run_one Cscale3500  stage2_vlm_Cscale3500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 3500 --lambda-rank 1.0
 # run_one Cscale2500  stage2_vlm_Cscale2500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 2500 --lambda-rank 1.0

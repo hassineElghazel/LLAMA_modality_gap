@@ -43,7 +43,10 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               "Crank15",
               # Cloc = clean-location: distance drive + scale-pin + rank-pin (isolate LOCATION,
               # hold scale AND rank) -> assumption-free location causality.
-              "Cloc")
+              "Cloc",
+              # Corient = clean-orientation: InfoNCE drive (lambda_o=0.9) + location-pin +
+              # scale-pin + rank-pin (isolate ORIENTATION, hold the other 3 axes).
+              "Corient")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:
