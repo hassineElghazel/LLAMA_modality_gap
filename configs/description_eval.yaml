@@ -1,0 +1,54 @@
+# TASK-MATCHED evaluation on COCO val2017 (5K images).
+#
+# The LLaVA-Instruct-trained models learned VISUAL INSTRUCTION FOLLOWING -- detailed,
+# image-grounded responses -- NOT short COCO captions. So we prompt with a VERBATIM
+# LLaVA detail-description instruction (matches the "detailed description" training
+# subtype), instead of the "brief, one-sentence" caption prompt that fought the training.
+#
+# Metrics are REFERENCE-FREE grounding only (no short-caption ground truth -> no mismatch):
+#   - CLIPScore : generated text vs the IMAGE (scripts/15_clipscore.py)
+#   - CHAIR     : mentioned objects vs the image's FULL object annotations
+#                 (segmentation + caption-derived) -> CHAIR_s, CHAIR_i, object recall,
+#                 objects/caption, length (scripts/19_chair.py)
+# NO BLEU/CIDEr: those need short reference captions and were the source of the mismatch.
+#
+# VERIFY the exact training prompt (punctuation matters) against your own data and
+# replace the line below if it differs:
+#   python -c "import json; d=json.load(open('data/llava_instruct_150k/llava_instruct_150k.json')); \
+#     ps=set(c['value'].replace('<image>','').strip() for r in d for c in r['conversations'] if c['from']=='human'); \
+#     print([p for p in ps if 'detail' in p.lower()][:10])"
+
+eval_set:
+  name: coco_val2017
+  num_images: 5000
+  annotations_json: data/coco/annotations/captions_val2017.json
+  image_root: data/coco/val2017
+
+prompt:
+  system: ""
+  user: |
+    <image>
+    Describe the following image in detail.
+
+generation:
+  do_sample: false
+  num_beams: 1
+  # 64 tokens = a genuine 2-3 sentence detailed description that stays FULLY within
+  # CLIP's 77-token text limit (no truncation). Bump to 128 for paragraph-length
+  # detail if you want (CLIP then sees only the first ~75 tokens -- consistent across
+  # conditions, so relative comparison holds; CHAIR benefits from the extra objects).
+  max_new_tokens: 64
+
+batch:
+  per_device_batch_size: 8
+
+checkpoint:
+  vlm_checkpoint: outputs/checkpoints/stage2_vlm.pt
+
+output:
+  predictions_dir: outputs/predictions
+  scores_dir: outputs/metrics
+  qualitative_report_dir: outputs/reports
+  num_qualitative_samples: 20
+
+seed: 42
