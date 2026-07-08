@@ -20,7 +20,7 @@
 
 eval_set:
   name: coco_val2017
-  num_images: 5000
+  num_images: 1300          # ~10% of the trained-data scale; enough for a stable ranking
   annotations_json: data/coco/annotations/captions_val2017.json
   image_root: data/coco/val2017
 
@@ -33,11 +33,13 @@ prompt:
 generation:
   do_sample: false
   num_beams: 1
-  # 64 tokens = a genuine 2-3 sentence detailed description that stays FULLY within
-  # CLIP's 77-token text limit (no truncation). Bump to 128 for paragraph-length
-  # detail if you want (CLIP then sees only the first ~75 tokens -- consistent across
-  # conditions, so relative comparison holds; CHAIR benefits from the extra objects).
-  max_new_tokens: 64
+  # 256 tokens lets each detailed description COMPLETE. These undertrained base-LLaMA-2
+  # checkpoints rarely emit EOS under greedy decoding, so a small cap (e.g. 64) truncates
+  # every response mid-sentence. CLIPScore still only encodes the first ~77 tokens, but
+  # that window is consistent across all conditions so the relative ranking holds, and
+  # CHAIR benefits from the full text (more objects, complete sentences). Drop to ~160
+  # if the model starts rambling/repeating at this length.
+  max_new_tokens: 256
 
 batch:
   per_device_batch_size: 8

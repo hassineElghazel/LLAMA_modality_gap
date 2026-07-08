@@ -37,7 +37,7 @@ DD_TAGS=""
 for c in $CONDS; do
   ck="$CKPT/stage2_vlm_${c}.pt"
   if [ ! -f "$ck" ]; then echo "[skip] $c (no checkpoint $ck)"; continue; fi
-  tag="${c}_dd"
+  tag="${c}_dd256"
   DD_TAGS="$DD_TAGS $tag"
   echo "==================== DESCRIBE  $tag ===================="
   # detailed-description generation (resumable via existing captions_<tag>.json)
@@ -51,22 +51,22 @@ done
 # ---- CHAIR across the detailed-description ablation (prints its own table) ----
 if [ -n "$DD_TAGS" ]; then
   echo "==================== CHAIR (detailed-description ablation) ===================="
-  python scripts/19_chair.py --conditions $DD_TAGS --baseline C3pinr_dd \
-      --config "$CFG" --out outputs/metrics/chair_summary_dd.json
+  python scripts/19_chair.py --conditions $DD_TAGS --baseline C3pinr_dd256 \
+      --config "$CFG" --out outputs/metrics/chair_summary_dd256.json
 fi
 
 # ---- CLIPScore summary table (CHAIR table printed above by 19_chair.py) ----
 python - <<'PY'
 import json, glob, os
 rows = []
-for f in sorted(glob.glob("outputs/metrics/clipscore_*_dd.json")):
+for f in sorted(glob.glob("outputs/metrics/clipscore_*_dd256.json")):
     cond = os.path.basename(f)[len("clipscore_"):-5]
     rows.append((cond, json.load(open(f)).get("CLIPScore")))
 print("\n%-20s %10s" % ("condition (detailed)", "CLIPScore"))
 print("-" * 32)
 for c, cs in rows:
     print("%-20s %10s" % (c, ("%.4f" % cs) if cs is not None else "--"))
-print("\nCHAIR (CHAIR_s / CHAIR_i / recall) -> table above + outputs/metrics/chair_summary_dd.json")
+print("\nCHAIR (CHAIR_s / CHAIR_i / recall) -> table above + outputs/metrics/chair_summary_dd256.json")
 PY
 
 echo "[desc-eval] done"
