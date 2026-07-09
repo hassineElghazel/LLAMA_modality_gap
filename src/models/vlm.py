@@ -93,12 +93,20 @@ class VLM(nn.Module):
         images,
         input_ids: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """Replace each <image> token with the projected visual sequence.
 
         Returns ``(inputs_embeds, attention_mask, expanded_labels)``. When
         ``labels`` is provided, the visual-token positions are masked with -100
         so AR cross-entropy is computed on text positions only (Overleaf §4.2).
+
+        ``attention_mask`` (text-space, aligned with ``input_ids``) is expanded
+        alongside the splice: the single ``<image>`` position becomes ``n_vis``
+        attended positions, and any padding positions keep their 0 so the LLM
+        never attends to pad tokens. If ``None``, an all-ones mask is used — the
+        correct behaviour for right-padded causal training (real tokens precede
+        pads, so causality already prevents them from seeing the padding).
 
         Constraint: every row of input_ids contains exactly one image
         placeholder. Multi-image not supported in this phase.
@@ -130,7 +138,15 @@ class VLM(nn.Module):
             i = int(pos.item())
             row = torch.cat([text_embeds[b, :i], proj_tokens[b], text_embeds[b, i + 1 :]], dim=0)
             new_rows.append(row)
-            new_masks.append(torch.ones(row.shape[0], dtype=torch.long, device=row.device))
+            if attention_mask is not None:
+                am = attention_mask[b].to(row.device)
+                row_mask = torch.cat(
+                    [am[:i], torch.ones(n_vis, dtype=am.dtype, device=row.device), am[i + 1 :]],
+                    dim=0,
+                )
+            else:
+                row_mask = torch.ones(row.shape[0], dtype=torch.long, device=row.device)
+            new_masks.append(row_mask)
             if labels is not None:
                 lab = labels[b]
                 ignore = torch.full((n_vis,), -100, dtype=lab.dtype, device=lab.device)
@@ -151,10 +167,13 @@ class VLM(nn.Module):
         return padded, att, out_labels
 
     def _build_input_embeddings(
-        self, images, input_ids: torch.Tensor
+        self,
+        images,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Backward-compatible alias: returns (inputs_embeds, attention_mask)."""
-        e, m, _ = self._build_inputs(images, input_ids, labels=None)
+        e, m, _ = self._build_inputs(images, input_ids, labels=None, attention_mask=attention_mask)
         return e, m
 
     # ---------- forward / generate ----------
@@ -164,8 +183,11 @@ class VLM(nn.Module):
         images,
         input_ids: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
     ):
-        inputs_embeds, attention_mask, exp_labels = self._build_inputs(images, input_ids, labels)
+        inputs_embeds, attention_mask, exp_labels = self._build_inputs(
+            images, input_ids, labels, attention_mask=attention_mask
+        )
         return self._llm(
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
@@ -179,8 +201,15 @@ class VLM(nn.Module):
             prompts = [prompt]
         else:
             prompts = list(prompt)
-        enc = self._tokenizer(prompts, return_tensors="pt", padding=True).to(self.cfg.device)
-        inputs_embeds, attention_mask = self._build_input_embeddings(images, enc["input_ids"])
+        prev_side = self._tokenizer.padding_side
+        self._tokenizer.padding_side = "left"
+        try:
+            enc = self._tokenizer(prompts, return_tensors="pt", padding=True).to(self.cfg.device)
+        finally:
+            self._tokenizer.padding_side = prev_side
+        inputs_embeds, attention_mask = self._build_input_embeddings(
+            images, enc["input_ids"], attention_mask=enc["attention_mask"]
+        )
         out_ids = self._llm.generate(
             inputs_embeds=inputs_embeds, attention_mask=attention_mask, **gen_kwargs
         )
