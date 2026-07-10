@@ -200,11 +200,20 @@ run_one() {
 # DONE: Cloc -> clean-location isolation (G_mu 178->31, trace+rank+orient held, CLIP 0.6325 == C5bp).
 # Location causal, assumption-free.
 # run_one Cloc  stage2_vlm_Cloc.pt  17_train_c5_distance.py  --pool all257 --lambda-d 0.1 --lambda-s 1.0 --lambda-rank 1.0
-# ACTIVE = Corient: CLEAN-ORIENTATION run = InfoNCE drive (lambda_o=0.5) + location-pin +
+# DONE = Corient: CLEAN-ORIENTATION run = InfoNCE drive (lambda_o=0.5) + location-pin +
 # scale-pin + rank-pin. Moves ONLY orientation with location/scale/rank held ->
 # clean single-axis isolation (mirror of Cloc/Cscale/Crank15). Read vs C3pinr.
 # lambda_o=0.5 -> AR weight 0.5 (balanced AR+InfoNCE).
-run_one Corient  stage2_vlm_Corient.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.5 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0
+# run_one Corient  stage2_vlm_Corient.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.5 --lambda-p 10 --lambda-s 1.0 --lambda-rank 1.0
+# ACTIVE = Clocorient: COMBINED run = Cloc + Corient dosages in one model. InfoNCE
+# orientation drive (lambda_o=0.5, Corient) + location CLOSURE toward mu_y
+# (--close-location, lambda_d=0.1, Cloc) + scale-pin + rank-pin (1.0/1.0, both).
+# --close-location retargets the location leg from the baseline centroid (pin) to
+# the text centroid mu_y and folds lambda_d into the convex AR budget:
+#   L = 0.4*L_AR + 0.5*L_NCE + 0.1*L_dist->mu_y + 1.0*L_scale + 1.0*L_rank
+# (w_ar = 1 - lambda_o - lambda_d = 0.4). Moves LOCATION + ORIENTATION jointly with
+# scale + rank held. Read vs C3pinr (and vs Cloc / Corient singles for additivity).
+run_one Clocorient  stage2_vlm_Clocorient.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.5 --close-location --lambda-p 0.1 --lambda-s 1.0 --lambda-rank 1.0
 # staged (trace curve, later; all vs C3pinr): add --btrace0 3500 / 2500 to the C3pinr recipe.
 # run_one Cscale3500  stage2_vlm_Cscale3500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 3500 --lambda-rank 1.0
 # run_one Cscale2500  stage2_vlm_Cscale2500.pt  18_train_c6_orientation_pinned.py  --pool all257 --lambda 0.0 --lambda-p 10 --lambda-s 1.0 --btrace0 2500 --lambda-rank 1.0

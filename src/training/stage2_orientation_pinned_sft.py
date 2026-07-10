@@ -62,6 +62,7 @@ def train_stage2_orientation_pinned(
     lambda_s: float = 0.0,
     pool: str = "cls",
     mu_x0: Optional[torch.Tensor] = None,
+    mu_close: Optional[torch.Tensor] = None,
     btrace0: Optional[float] = None,
     lambda_r: float = 0.0,
     effrank0: Optional[float] = None,
@@ -97,13 +98,23 @@ def train_stage2_orientation_pinned(
     # control == measurement (mirrors the C5/C5bp distance trainer).
     if pool not in ("cls", "all257"):
         raise ValueError(f"pool must be 'cls' or 'all257', got {pool!r}")
-    use_loc_pin = lambda_p > 0.0
+    # Location-CLOSE mode (Clocorient): when mu_close is given, the location leg
+    # targets the frozen text centroid mu_y instead of the baseline image centroid
+    # mu_x0 -- i.e. it CLOSES G_mu (Cloc's distance drive) rather than PINNING it.
+    # It is then a convex drive (shares the AR budget: w_ar = 1 - lambda_o - lambda_p),
+    # matching Cloc's convex split. mu_close=None => original pin behaviour (unchanged).
+    use_loc_close = (lambda_p > 0.0) and (mu_close is not None)
+    use_loc_pin = (lambda_p > 0.0) and (mu_close is None)
     use_scale_pin = lambda_s > 0.0
     use_rank_pin = lambda_r > 0.0
     if use_loc_pin and mu_x0 is not None:
         mu_x0 = mu_x0.to(device=device, dtype=torch.float32).detach()
         if mu_x0.ndim != 1:
             raise ValueError(f"mu_x0 must be 1-D (D,), got shape {tuple(mu_x0.shape)}")
+    if use_loc_close:
+        mu_close = mu_close.to(device=device, dtype=torch.float32).detach()
+        if mu_close.ndim != 1:
+            raise ValueError(f"mu_close must be 1-D (D,), got shape {tuple(mu_close.shape)}")
     if use_scale_pin and btrace0 is not None:
         btrace0 = float(btrace0)
         if btrace0 <= 0:
@@ -153,6 +164,8 @@ def train_stage2_orientation_pinned(
     trainable += list(temp.parameters())
     n_trainable = sum(p.numel() for p in trainable)
     pin_msg = ""
+    if use_loc_close:
+        pin_msg += f"  loc-CLOSE lambda_d={lambda_p} (->mu_y ||mu_y||={float(mu_close.norm()):.1f})"
     if use_loc_pin:
         m0 = f"||mu_x0||={float(mu_x0.norm()):.1f}" if mu_x0 is not None else "auto@step1"
         pin_msg += f"  loc-pin lambda_p={lambda_p} ({m0})"
@@ -216,8 +229,15 @@ def train_stage2_orientation_pinned(
             start_step = int(blob.get("step", 0))
         console.log(f"[c6] resumed from {resume_from} at step={start_step}/{total_steps}")
 
-    # convex weights (matches C4's non-Kendall path).
-    w_ar = 1.0 - lambda_contrastive
+    # convex weights (matches C4's non-Kendall path). In location-CLOSE mode the
+    # distance leg is a second convex drive that shares the AR budget, so
+    # w_ar = 1 - lambda_o - lambda_d (three-way convex, mirroring Cloc's split);
+    # pins/penalties never enter w_ar. In pin mode this stays w_ar = 1 - lambda_o.
+    w_ar = 1.0 - lambda_contrastive - (lambda_p if use_loc_close else 0.0)
+    if w_ar < 0.0:
+        raise ValueError(
+            f"w_ar={w_ar:.3f} < 0: lambda_o={lambda_contrastive} + lambda_d={lambda_p} > 1"
+        )
 
     diag = {"loc_drift": 0.0, "btrace": 0.0, "effrank": 0.0}
 
@@ -255,7 +275,13 @@ def train_stage2_orientation_pinned(
         zbar = zf.mean(dim=0)                                          # (4096,)
         zc = zf - zbar                                                 # (B,4096) centered cloud
         l_loc = l_scale = l_rank = None
-        if use_loc_pin:
+        if use_loc_close:
+            # Clocorient: CLOSE location toward the frozen text centroid mu_y
+            # (Cloc's distance drive). Same form / normaliser as the pin, only the
+            # target differs; loc_drift now reports the live gap-to-text G_mu.
+            l_loc = ((zbar - mu_close) ** 2).sum() / trace_x
+            diag["loc_drift"] = float((zbar.detach() - mu_close).norm())
+        elif use_loc_pin:
             if mu_x0 is None:
                 # first contrastive step: connector still C2-init -> baseline
                 # location. Freeze it (no hardcoded constant needed).
@@ -296,7 +322,10 @@ def train_stage2_orientation_pinned(
                 diag["effrank"] = float(torch.diagonal(G).sum() ** 2 / (G * G).sum().clamp_min(1e-12))
         return l_nce, l_loc, l_scale, l_rank
 
-    run_contrastive = lambda_contrastive > 0.0 or use_loc_pin or use_scale_pin or use_rank_pin
+    run_contrastive = (
+        lambda_contrastive > 0.0 or use_loc_close or use_loc_pin
+        or use_scale_pin or use_rank_pin
+    )
 
     step = start_step
     done = False
@@ -339,7 +368,12 @@ def train_stage2_orientation_pinned(
 
                 if step % log_every == 0:
                     lr_now = scheduler.get_last_lr()[0]
-                    loc_str = f"L_loc={last_loc:.4f} drift={diag['loc_drift']:.2f} " if use_loc_pin else ""
+                    if use_loc_close:
+                        loc_str = f"L_dist={last_loc:.4f} Gmu={diag['loc_drift']:.2f} "
+                    elif use_loc_pin:
+                        loc_str = f"L_loc={last_loc:.4f} drift={diag['loc_drift']:.2f} "
+                    else:
+                        loc_str = ""
                     scale_str = f"L_scale={last_scale:.4f} " if use_scale_pin else ""
                     rank_str = f"L_rank={last_rank:.4f} effrank={diag['effrank']:.1f} " if use_rank_pin else ""
                     console.log(
@@ -369,12 +403,17 @@ def train_stage2_orientation_pinned(
 
     # Sidecar: record the orientation head + pin state so the run is reportable.
     sidecar = {
-        "mode": "orientation_pinned",
+        "mode": "loc_close+orientation_pinned" if use_loc_close else "orientation_pinned",
         "pool": pool,
         "lambda_o": float(lambda_contrastive),
         "lambda_p": float(lambda_p),
+        "lambda_d": float(lambda_p) if use_loc_close else None,
+        "w_ar": float(w_ar),
         "lambda_s": float(lambda_s),
         "trace_x": trace_x,
+        "loc_close": bool(use_loc_close),
+        "mu_y_norm": float(mu_close.norm()) if use_loc_close else None,
+        "final_gap_to_text": diag["loc_drift"] if use_loc_close else None,
         "mu_x0_norm": float(mu_x0.norm()) if (use_loc_pin and mu_x0 is not None) else None,
         "btrace0": btrace0 if use_scale_pin else None,
         "temperature": float(temp.temperature),

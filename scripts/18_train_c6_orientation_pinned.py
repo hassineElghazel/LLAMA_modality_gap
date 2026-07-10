@@ -99,6 +99,19 @@ def _resolve_trace_x(p_cfg: dict) -> float:
     return tr
 
 
+def _load_mu_y(path: str, device: str) -> torch.Tensor:
+    """Frozen global text centroid = mean over rows of the C3 text embeddings
+    (same source and form as C5/Cloc's distance target)."""
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"mu_y source not found: {path}. Run the C3 extraction "
+            f"(scripts/07_extract_projected.py --condition C3_stage2) first."
+        )
+    t = torch.load(str(p), map_location="cpu")           # (N, 4096)
+    return t.mean(dim=0).to(device=device, dtype=torch.float32)
+
+
 def main():
     stage2_entry = _load_stage2_entry()
     stage2_entry._maybe_apply_liger()
@@ -131,6 +144,16 @@ def main():
                    help="geometry object for InfoNCE + both pins: 'cls' (token 0, "
                         "original) or 'all257' (mean of all 257 projected tokens = "
                         "control==measurement). Default: config 'pool' or 'cls'.")
+    p.add_argument("--close-location", dest="close_location", action="store_true",
+                   help="Clocorient: RETARGET the location leg from the baseline "
+                        "centroid mu_x0 (pin) to the frozen text centroid mu_y "
+                        "(CLOSE G_mu, = Cloc's distance drive). --lambda-p becomes "
+                        "the closure weight lambda_d and joins the convex AR budget "
+                        "(w_ar = 1 - lambda_o - lambda_d). Combines with --lambda "
+                        "(orientation) + --lambda-s + --lambda-rank.")
+    p.add_argument("--mu-y-source", dest="mu_y_source",
+                   default="outputs/embeddings/projected_C3_stage2_text_pooled.pt",
+                   help="text-centroid source for --close-location (same as Cloc/C5).")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
@@ -241,8 +264,18 @@ def main():
     # ----- frozen pin normaliser (mu_x0 / btrace0 auto-measured at step 1) -----
     trace_x = _resolve_trace_x(p_cfg)
 
+    # Clocorient: load the frozen text centroid so the location leg CLOSES G_mu
+    # (toward mu_y) instead of pinning it to the baseline image centroid.
+    mu_close = None
+    if args.close_location:
+        mu_close = _load_mu_y(args.mu_y_source, device)
+        print(f"[c6] close-location: mu_y loaded from {args.mu_y_source} "
+              f"||mu_y||={float(mu_close.norm()):.2f} (lambda_d={lambda_p})")
+
     pins = []
-    if lambda_p > 0:
+    if args.close_location and lambda_p > 0:
+        pins.append(f"loc-CLOSE->mu_y(lambda_d={lambda_p})")
+    elif lambda_p > 0:
         pins.append(f"loc(lambda_p={lambda_p})")
     if lambda_s > 0:
         b0 = f"{float(btrace0):.1f}" if btrace0 is not None else "auto@step1"
@@ -267,6 +300,7 @@ def main():
             lambda_s=lambda_s,
             pool=pool,
             mu_x0=None,  # auto-measure baseline centroid at step 1 (CLS or pooled)
+            mu_close=mu_close,  # non-None => location leg CLOSES toward mu_y (Clocorient)
             btrace0=float(btrace0) if btrace0 is not None else None,
             lambda_r=lambda_r,
             effrank0=float(effrank0) if effrank0 is not None else None,

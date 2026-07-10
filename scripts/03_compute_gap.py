@@ -46,7 +46,11 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               "Cloc",
               # Corient = clean-orientation: InfoNCE drive (lambda_o=0.9) + location-pin +
               # scale-pin + rank-pin (isolate ORIENTATION, hold the other 3 axes).
-              "Corient")
+              "Corient",
+              # Clocorient = combined: Cloc + Corient dosages in one model -- InfoNCE
+              # orientation (lambda_o=0.5) + location CLOSURE to mu_y (lambda_d=0.1) +
+              # scale-pin + rank-pin. Moves LOCATION + ORIENTATION jointly, scale/rank held.
+              "Clocorient")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:
