@@ -31,7 +31,7 @@ conda activate llama_gap
 CFG=configs/description_eval.yaml
 CKPT=outputs/checkpoints
 CLIP_MODEL="${CLIP_MODEL:-/nfs/home/elghazel/clip_b32}"
-CONDS="C3pinr C5bp_lam0p1 Cscale1500 C4bp_lam0p9 Crank15 Cloc"
+CONDS="C3pinr Corient"
 
 DD_TAGS=""
 for c in $CONDS; do
