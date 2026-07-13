@@ -12,6 +12,11 @@ set -Eeuo pipefail
 source ~/miniforge3/etc/profile.d/conda.sh
 conda activate llama_gap
 
+# ---- GPU allocation sanity banner (diagnose "No CUDA GPUs are available") ----
+echo "[node] host=$(hostname)  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+echo "[node] SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-<unset>}  SLURM_GPUS=${SLURM_GPUS:-<unset>}"
+nvidia-smi -L || echo "[warn] nvidia-smi -L failed on $(hostname)"
+
 # ---------------------------------------------------------------------------
 # OUT-OF-DISTRIBUTION grounding eval on 100 NoCaps (Open Images) images.
 #
