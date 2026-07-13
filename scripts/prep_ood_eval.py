@@ -145,7 +145,9 @@ def main() -> None:
         ds = load_dataset(args.hf_dataset, split=args.hf_split, streaming=True)
         col = _pick_image_column(ds)
         print(f"[hf] {args.hf_dataset}:{args.hf_split} (streaming)  image_col='{col}'")
-        ds = ds.shuffle(seed=args.seed, buffer_size=2000)
+        # buffer < one shard (~1500 rows) so 300 picks stay inside shard 0 and we
+        # never request a later (possibly flaky) shard.
+        ds = ds.shuffle(seed=args.seed, buffer_size=500)
         for src_row, rec in enumerate(ds):
             if next_id >= target:
                 break
