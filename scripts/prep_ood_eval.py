@@ -69,14 +69,26 @@ def _load_candidates_from_dir(image_dir: Path) -> list[Path]:
 def _pick_image_column(ds) -> str:
     """Find the PIL-Image feature column (NoCaps uses ``image``)."""
     from datasets import Image as HFImage
-    for name, feat in ds.features.items():
-        if isinstance(feat, HFImage):
-            return name
-    # fallback: first column literally named like an image
-    for name in ds.column_names:
-        if "image" in name.lower():
-            return name
-    raise SystemExit(f"[fatal] no Image column in {ds.column_names}")
+    feats = getattr(ds, "features", None)
+    if feats:
+        for name, feat in feats.items():
+            if isinstance(feat, HFImage):
+                return name
+        for name in feats:                       # fallback: name looks like image
+            if "image" in name.lower():
+                return name
+    # streaming with no declared features: peek the first row
+    try:
+        probe = next(iter(ds))
+        for name, val in probe.items():
+            if isinstance(val, Image.Image):
+                return name
+        for name in probe:
+            if "image" in name.lower():
+                return name
+    except Exception:
+        pass
+    raise SystemExit("[fatal] could not locate an image column")
 
 
 def _save_rgb_jpg(src, dst: Path) -> bool:
@@ -126,24 +138,26 @@ def main() -> None:
     target = args.n
 
     if args.hf_dataset is not None:
+        # STREAM the split: pull bytes only as consumed, so we never download the
+        # other splits' shards. shuffle() uses a bounded buffer, so the 300 picks
+        # are seed-deterministic without random-accessing the whole set.
         from datasets import load_dataset
-        ds = load_dataset(args.hf_dataset, split=args.hf_split)
+        ds = load_dataset(args.hf_dataset, split=args.hf_split, streaming=True)
         col = _pick_image_column(ds)
-        print(f"[hf] {args.hf_dataset}:{args.hf_split}  n={len(ds)}  image_col='{col}'")
-        order = list(range(len(ds)))
-        rng.shuffle(order)
-        for idx in order:
+        print(f"[hf] {args.hf_dataset}:{args.hf_split} (streaming)  image_col='{col}'")
+        ds = ds.shuffle(seed=args.seed, buffer_size=2000)
+        for src_row, rec in enumerate(ds):
             if next_id >= target:
                 break
             dst = img_root / f"{next_id:012d}.jpg"
             try:
-                im = ds[idx][col]            # datasets decodes to PIL on access
+                im = rec[col]                # decoded to PIL on access
             except Exception as e:
-                print(f"  [skip] row {idx}: {e}")
+                print(f"  [skip] streamed row {src_row}: {e}")
                 continue
             if _save_rgb_jpg(im, dst):
                 images_meta.append({"id": next_id, "file_name": dst.name,
-                                    "source_row": int(idx)})
+                                    "source_row": int(src_row)})
                 next_id += 1
     elif args.nocaps_json is not None:
         cands = _load_candidates_from_nocaps(args.nocaps_json)
