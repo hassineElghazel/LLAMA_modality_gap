@@ -2,6 +2,7 @@
 #SBATCH --job-name=mllm-ood-eval
 #SBATCH --partition=RTX
 #SBATCH --gpus=2080ti:1
+#SBATCH --exclude=baldur          # baldur GPU 0000:60:00.0 is faulted (NVML "Unknown Error"); avoid it
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
