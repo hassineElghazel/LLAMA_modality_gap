@@ -12,24 +12,8 @@ set -Eeuo pipefail
 source ~/miniforge3/etc/profile.d/conda.sh
 conda activate llama_gap
 
-# ---- GPU allocation sanity banner (diagnose "No CUDA GPUs are available") ----
-echo "[node] host=$(hostname)  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
-echo "[node] SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-<unset>}  SLURM_GPUS=${SLURM_GPUS:-<unset>}"
-
-# ---- assert the allocated GPU is HEALTHY ------------------------------------
-# baldur has a faulted card (PCI 60:00.0 -> NVML "Unknown Error"). A co-allocated
-# dead GPU aborts cuInit() for the whole process, so masking it is not enough --
-# we must simply not be given it. If we landed on it, fail fast (a sentinel job
-# should be holding the bad GPU; see submit_gpu_hold.sbatch).
-if ! nvidia-smi -L >/dev/null 2>&1; then
-  echo "[fatal] allocated GPU is faulted on $(hostname) (CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES)." >&2
-  echo "        Keep the sentinel (submit_gpu_hold.sbatch) running and resubmit." >&2
-  exit 1
-fi
-nvidia-smi -L
-
 # ---------------------------------------------------------------------------
-# OUT-OF-DISTRIBUTION grounding eval on 100 NoCaps (Open Images) images.
+# OUT-OF-DISTRIBUTION grounding eval on 300 NoCaps (Open Images) images.
 #
 # NoCaps is disjoint from COCO -> these checkpoints (trained on LLaVA-Instruct /
 # COCO train2017) have never seen this domain. Only two conditions, only one
