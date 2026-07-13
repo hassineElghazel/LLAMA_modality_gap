@@ -1,0 +1,73 @@
+#!/bin/bash
+#SBATCH --job-name=mllm-ood-eval
+#SBATCH --partition=RTX
+#SBATCH --gpus=2080ti:1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64GB
+#SBATCH --time=04:00:00
+#SBATCH --output=outputs/logs/oodeval_%j.out
+#SBATCH --error=outputs/logs/oodeval_%j.err
+set -Eeuo pipefail
+source ~/miniforge3/etc/profile.d/conda.sh
+conda activate llama_gap
+
+# ---------------------------------------------------------------------------
+# OUT-OF-DISTRIBUTION grounding eval on 100 NoCaps (Open Images) images.
+#
+# NoCaps is disjoint from COCO -> these checkpoints (trained on LLaVA-Instruct /
+# COCO train2017) have never seen this domain. Only two conditions, only one
+# metric: does Cloc's location-closure CLIPScore win survive off-distribution?
+#
+#   baseline : C3pinr  (gap left open)
+#   treatment: Cloc    (location closed, rank pinned)
+#
+# Same detail prompt + 256-tok decode as dd256 (configs/ood_eval.yaml), so the
+# _ood CLIPScore is directly comparable to the in-distribution _dd256 CLIPScore.
+#
+# Prereq (run once, needs the NoCaps annotation file or a local image folder):
+#   python scripts/prep_ood_eval.py --nocaps-json <nocaps_val_4500_captions.json> \
+#       --out-root data/nocaps --n 100 --seed 42
+#
+# Inference only. Run from repo root: sbatch scripts/submit_ood_eval.sbatch
+# ---------------------------------------------------------------------------
+
+CFG=configs/ood_eval.yaml
+CKPT=outputs/checkpoints
+CLIP_MODEL="${CLIP_MODEL:-/nfs/home/elghazel/clip_b32}"
+CONDS="C3pinr Cloc"
+
+if [ ! -f data/nocaps/ood_eval_100.json ]; then
+  echo "[fatal] data/nocaps/ood_eval_100.json missing -- run scripts/prep_ood_eval.py first" >&2
+  exit 1
+fi
+
+for c in $CONDS; do
+  ck="$CKPT/stage2_vlm_${c}.pt"
+  if [ ! -f "$ck" ]; then echo "[skip] $c (no checkpoint $ck)"; continue; fi
+  tag="${c}_ood"
+  echo "==================== DESCRIBE (OOD)  $tag ===================="
+  python scripts/08_run_captioning.py --config "$CFG" --condition "$tag" --vlm-checkpoint "$ck"
+  HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/15_clipscore.py \
+      --config "$CFG" --condition "$tag" --clip-model "$CLIP_MODEL" \
+      || echo "[ood] $tag clipscore FAILED (rerun 15_clipscore.py --config $CFG --condition $tag)"
+done
+
+# ---- CLIPScore summary: baseline vs Cloc on the OOD set ----
+python - <<'PY'
+import json, os
+print("\n%-16s %10s" % ("condition (OOD)", "CLIPScore"))
+print("-" * 28)
+vals = {}
+for c in ("C3pinr_ood", "Cloc_ood"):
+    f = f"outputs/metrics/clipscore_{c}.json"
+    cs = json.load(open(f))["CLIPScore"] if os.path.exists(f) else None
+    vals[c] = cs
+    print("%-16s %10s" % (c, ("%.4f" % cs) if cs is not None else "--"))
+if all(v is not None for v in vals.values()):
+    d = vals["Cloc_ood"] - vals["C3pinr_ood"]
+    print("-" * 28)
+    print("%-16s %+10.4f  (Cloc - C3pinr)" % ("delta", d))
+PY
+
+echo "[ood-eval] done"

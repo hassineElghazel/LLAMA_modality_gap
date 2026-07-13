@@ -1,0 +1,45 @@
+# OUT-OF-DISTRIBUTION grounding eval: 100 NoCaps (Open Images) images.
+#
+# NoCaps images are disjoint from COCO, so the LLaVA-Instruct-trained (COCO
+# train2017) checkpoints have NEVER seen this domain. This is the held-out-domain
+# stress test for the location-closure effect: run C3pinr (baseline) and Cloc,
+# score REFERENCE-FREE CLIPScore only, and ask whether Cloc's CLIPScore advantage
+# survives off the COCO distribution.
+#
+# Same detail prompt + 256-token greedy decode as the dd256 eval, so the OOD
+# CLIPScore is directly comparable to the in-distribution dd256 CLIPScore.
+#
+# Build the eval set first:
+#   python scripts/prep_ood_eval.py --nocaps-json <nocaps_val_4500_captions.json> \
+#       --out-root data/nocaps --n 100 --seed 42
+
+eval_set:
+  name: nocaps_ood_100
+  num_images: 100
+  annotations_json: data/nocaps/ood_eval_100.json   # written by prep_ood_eval.py
+  image_root: data/nocaps/images
+
+prompt:
+  system: ""
+  user: |
+    <image>
+    Describe the following image in detail.
+
+generation:
+  do_sample: false
+  num_beams: 1
+  max_new_tokens: 256
+
+batch:
+  per_device_batch_size: 8
+
+checkpoint:
+  vlm_checkpoint: outputs/checkpoints/stage2_vlm.pt
+
+output:
+  predictions_dir: outputs/predictions
+  scores_dir: outputs/metrics
+  qualitative_report_dir: outputs/reports
+  num_qualitative_samples: 20
+
+seed: 42
