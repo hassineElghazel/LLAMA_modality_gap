@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=mllm-ood-eval
 #SBATCH --partition=RTX
-#SBATCH --gpus=2080ti:2            # grab 2: baldur has a faulted card SLURM keeps handing out; we run on the healthy one
+#SBATCH --gpus=2080ti:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
@@ -16,26 +16,17 @@ conda activate llama_gap
 echo "[node] host=$(hostname)  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "[node] SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-<unset>}  SLURM_GPUS=${SLURM_GPUS:-<unset>}"
 
-# ---- select a HEALTHY GPU among the allocated ones --------------------------
-# baldur has a faulted card (PCI 60:00.0 -> NVML "Unknown Error") that SLURM keeps
-# handing out. We requested 2 GPUs; probe each allocated local index and keep the
-# first that answers nvidia-smi. If none is healthy, requeue rather than crash.
-IFS=',' read -ra _VIS <<< "${CUDA_VISIBLE_DEVICES:-0}"
-_good=""
-for _idx in "${!_VIS[@]}"; do
-  if nvidia-smi -i "$_idx" --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
-    _good="$_idx"; echo "[gpu] local index $_idx OK: $(nvidia-smi -i "$_idx" --query-gpu=name --format=csv,noheader)"
-  else
-    echo "[gpu] local index $_idx FAULTED (skipped)"
-  fi
-done
-if [ -z "$_good" ]; then
-  echo "[fatal] no healthy GPU in CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES -- requeuing job" >&2
-  scontrol requeue "$SLURM_JOB_ID" || true
+# ---- assert the allocated GPU is HEALTHY ------------------------------------
+# baldur has a faulted card (PCI 60:00.0 -> NVML "Unknown Error"). A co-allocated
+# dead GPU aborts cuInit() for the whole process, so masking it is not enough --
+# we must simply not be given it. If we landed on it, fail fast (a sentinel job
+# should be holding the bad GPU; see submit_gpu_hold.sbatch).
+if ! nvidia-smi -L >/dev/null 2>&1; then
+  echo "[fatal] allocated GPU is faulted on $(hostname) (CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES)." >&2
+  echo "        Keep the sentinel (submit_gpu_hold.sbatch) running and resubmit." >&2
   exit 1
 fi
-export CUDA_VISIBLE_DEVICES="$_good"
-echo "[gpu] running on local index $_good"
+nvidia-smi -L
 
 # ---------------------------------------------------------------------------
 # OUT-OF-DISTRIBUTION grounding eval on 100 NoCaps (Open Images) images.
