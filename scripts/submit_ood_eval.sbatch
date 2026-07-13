@@ -1,8 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=mllm-ood-eval
 #SBATCH --partition=RTX
-#SBATCH --gpus=2080ti:1
-#SBATCH --exclude=baldur          # baldur GPU 0000:60:00.0 is faulted (NVML "Unknown Error"); avoid it
+#SBATCH --gpus=2080ti:2            # grab 2: baldur has a faulted card SLURM keeps handing out; we run on the healthy one
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64GB
@@ -16,7 +15,27 @@ conda activate llama_gap
 # ---- GPU allocation sanity banner (diagnose "No CUDA GPUs are available") ----
 echo "[node] host=$(hostname)  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "[node] SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-<unset>}  SLURM_GPUS=${SLURM_GPUS:-<unset>}"
-nvidia-smi -L || echo "[warn] nvidia-smi -L failed on $(hostname)"
+
+# ---- select a HEALTHY GPU among the allocated ones --------------------------
+# baldur has a faulted card (PCI 60:00.0 -> NVML "Unknown Error") that SLURM keeps
+# handing out. We requested 2 GPUs; probe each allocated local index and keep the
+# first that answers nvidia-smi. If none is healthy, requeue rather than crash.
+IFS=',' read -ra _VIS <<< "${CUDA_VISIBLE_DEVICES:-0}"
+_good=""
+for _idx in "${!_VIS[@]}"; do
+  if nvidia-smi -i "$_idx" --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
+    _good="$_idx"; echo "[gpu] local index $_idx OK: $(nvidia-smi -i "$_idx" --query-gpu=name --format=csv,noheader)"
+  else
+    echo "[gpu] local index $_idx FAULTED (skipped)"
+  fi
+done
+if [ -z "$_good" ]; then
+  echo "[fatal] no healthy GPU in CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES -- requeuing job" >&2
+  scontrol requeue "$SLURM_JOB_ID" || true
+  exit 1
+fi
+export CUDA_VISIBLE_DEVICES="$_good"
+echo "[gpu] running on local index $_good"
 
 # ---------------------------------------------------------------------------
 # OUT-OF-DISTRIBUTION grounding eval on 100 NoCaps (Open Images) images.
