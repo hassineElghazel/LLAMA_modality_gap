@@ -11,12 +11,12 @@
 #
 # Build the eval set first:
 #   python scripts/prep_ood_eval.py --nocaps-json <nocaps_val_4500_captions.json> \
-#       --out-root data/nocaps --n 100 --seed 42
+#       --out-root data/nocaps --n 300 --seed 42
 
 eval_set:
-  name: nocaps_ood_100
-  num_images: 100
-  annotations_json: data/nocaps/ood_eval_100.json   # written by prep_ood_eval.py
+  name: nocaps_ood_300
+  num_images: 300
+  annotations_json: data/nocaps/ood_eval_300.json   # written by prep_ood_eval.py
   image_root: data/nocaps/images
 
 prompt:

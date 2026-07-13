@@ -27,7 +27,7 @@ conda activate llama_gap
 #
 # Prereq (run once, needs the NoCaps annotation file or a local image folder):
 #   python scripts/prep_ood_eval.py --nocaps-json <nocaps_val_4500_captions.json> \
-#       --out-root data/nocaps --n 100 --seed 42
+#       --out-root data/nocaps --n 300 --seed 42
 #
 # Inference only. Run from repo root: sbatch scripts/submit_ood_eval.sbatch
 # ---------------------------------------------------------------------------
@@ -35,10 +35,10 @@ conda activate llama_gap
 CFG=configs/ood_eval.yaml
 CKPT=outputs/checkpoints
 CLIP_MODEL="${CLIP_MODEL:-/nfs/home/elghazel/clip_b32}"
-CONDS="C3pinr Cloc"
+CONDS="Cloc C3pinr"   # Cloc first (treatment), then baseline
 
-if [ ! -f data/nocaps/ood_eval_100.json ]; then
-  echo "[fatal] data/nocaps/ood_eval_100.json missing -- run scripts/prep_ood_eval.py first" >&2
+if [ ! -f data/nocaps/ood_eval_300.json ]; then
+  echo "[fatal] data/nocaps/ood_eval_300.json missing -- run scripts/prep_ood_eval.py first" >&2
   exit 1
 fi
 
@@ -59,7 +59,7 @@ import json, os
 print("\n%-16s %10s" % ("condition (OOD)", "CLIPScore"))
 print("-" * 28)
 vals = {}
-for c in ("C3pinr_ood", "Cloc_ood"):
+for c in ("Cloc_ood", "C3pinr_ood"):
     f = f"outputs/metrics/clipscore_{c}.json"
     cs = json.load(open(f))["CLIPScore"] if os.path.exists(f) else None
     vals[c] = cs
