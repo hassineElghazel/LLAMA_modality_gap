@@ -19,19 +19,22 @@ Images are materialised as ``<image_root>/<id:012d>.jpg`` so that BOTH the loade
 (reads ``file_name``) and ``scripts/15_clipscore.py`` (reconstructs ``{id:012d}.jpg``)
 resolve every image with ZERO changes to the scoring code.
 
-Two input modes:
+Three input modes (pass exactly one):
+  --hf-dataset ID      load a HuggingFace image-caption dataset (e.g.
+                       ``HuggingFaceM4/NoCaps``) and take its decoded images
+                       directly. Most robust: the hub resolves hosting, so no raw
+                       S3/URL guessing and no separate annotation file. RECOMMENDED.
   --nocaps-json PATH   official nocaps_val_4500_captions.json; images are fetched
-                       from each entry's ``coco_url`` (NoCaps S3 mirror).
+                       from each entry's ``coco_url`` (NoCaps S3 mirror -- often
+                       AccessDenied now, prefer --hf-dataset).
   --image-dir  PATH    a folder of already-downloaded natural images (*.jpg/*.png);
-                       100 are sampled and copied. Use this if the cluster already
-                       has NoCaps/Open-Images pulled down (no network needed).
+                       n are sampled and copied. Offline -- no network needed.
 
-Deterministic: fixed seed picks the same 100 images every run.
+Deterministic: fixed seed picks the same n images every run.
 
-Example:
-    python scripts/prep_ood_eval.py \
-        --nocaps-json data/nocaps/nocaps_val_4500_captions.json \
-        --out-root data/nocaps --n 100 --seed 42
+Example (recommended):
+    python scripts/prep_ood_eval.py --hf-dataset HuggingFaceM4/NoCaps \
+        --hf-split validation --out-root data/nocaps --n 300 --seed 42
 """
 from __future__ import annotations
 
@@ -63,14 +66,29 @@ def _load_candidates_from_dir(image_dir: Path) -> list[Path]:
     return sorted(p for p in image_dir.rglob("*") if p.suffix.lower() in exts)
 
 
-def _save_rgb_jpg(src_or_bytes, dst: Path) -> bool:
-    """Open an image (path or raw bytes), convert to RGB, save as JPEG."""
+def _pick_image_column(ds) -> str:
+    """Find the PIL-Image feature column (NoCaps uses ``image``)."""
+    from datasets import Image as HFImage
+    for name, feat in ds.features.items():
+        if isinstance(feat, HFImage):
+            return name
+    # fallback: first column literally named like an image
+    for name in ds.column_names:
+        if "image" in name.lower():
+            return name
+    raise SystemExit(f"[fatal] no Image column in {ds.column_names}")
+
+
+def _save_rgb_jpg(src, dst: Path) -> bool:
+    """Save an image to dst as RGB JPEG. Accepts a PIL.Image, raw bytes, or a path."""
     try:
-        if isinstance(src_or_bytes, (bytes, bytearray)):
+        if isinstance(src, Image.Image):
+            im = src
+        elif isinstance(src, (bytes, bytearray)):
             import io
-            im = Image.open(io.BytesIO(src_or_bytes))
+            im = Image.open(io.BytesIO(src))
         else:
-            im = Image.open(src_or_bytes)
+            im = Image.open(src)
         im.convert("RGB").save(dst, "JPEG", quality=95)
         return True
     except Exception as e:  # corrupt download / unreadable file
@@ -80,6 +98,10 @@ def _save_rgb_jpg(src_or_bytes, dst: Path) -> bool:
 
 def main() -> None:
     p = argparse.ArgumentParser()
+    p.add_argument("--hf-dataset", default=None,
+                   help="HuggingFace dataset id, e.g. HuggingFaceM4/NoCaps (recommended)")
+    p.add_argument("--hf-split", default="validation",
+                   help="split for --hf-dataset (NoCaps: validation)")
     p.add_argument("--nocaps-json", type=Path, default=None,
                    help="official nocaps_val_4500_captions.json (download images via coco_url)")
     p.add_argument("--image-dir", type=Path, default=None,
@@ -90,8 +112,9 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
-    if (args.nocaps_json is None) == (args.image_dir is None):
-        p.error("pass exactly one of --nocaps-json or --image-dir")
+    n_modes = sum(x is not None for x in (args.hf_dataset, args.nocaps_json, args.image_dir))
+    if n_modes != 1:
+        p.error("pass exactly one of --hf-dataset, --nocaps-json, or --image-dir")
 
     rng = random.Random(args.seed)
     img_root = args.out_root / "images"
@@ -102,7 +125,27 @@ def main() -> None:
     # oversample so download/decode failures still leave us with exactly n.
     target = args.n
 
-    if args.nocaps_json is not None:
+    if args.hf_dataset is not None:
+        from datasets import load_dataset
+        ds = load_dataset(args.hf_dataset, split=args.hf_split)
+        col = _pick_image_column(ds)
+        print(f"[hf] {args.hf_dataset}:{args.hf_split}  n={len(ds)}  image_col='{col}'")
+        order = list(range(len(ds)))
+        rng.shuffle(order)
+        for idx in order:
+            if next_id >= target:
+                break
+            dst = img_root / f"{next_id:012d}.jpg"
+            try:
+                im = ds[idx][col]            # datasets decodes to PIL on access
+            except Exception as e:
+                print(f"  [skip] row {idx}: {e}")
+                continue
+            if _save_rgb_jpg(im, dst):
+                images_meta.append({"id": next_id, "file_name": dst.name,
+                                    "source_row": int(idx)})
+                next_id += 1
+    elif args.nocaps_json is not None:
         cands = _load_candidates_from_nocaps(args.nocaps_json)
         cands.sort(key=lambda t: t[0])              # stable order before shuffle
         rng.shuffle(cands)
