@@ -1,0 +1,26 @@
+# OUT-OF-DISTRIBUTION data-config for the modality-gap pipeline on NoCaps.
+#
+# Identical to configs/data.yaml except the diagnostic manifest points at the 300
+# NoCaps (Open Images) pairs built by scripts/prep_ood_refs.py. 07_extract_projected
+# reads only diagnostic_sample.{manifest_path,seed}; the rest is carried for parity.
+
+coco_val2017:
+  image_root: data/coco/val2017
+  annotations_json: data/coco/annotations/captions_val2017.json
+  expected_num_images: 5000
+
+diagnostic_sample:
+  num_pairs: 300
+  caption_per_image: 1
+  seed: 42
+  manifest_path: data/nocaps/ood_manifest_300.json   # written by prep_ood_refs.py
+
+bunny_v1_1:
+  hf_repo: BoyaWu10/Bunny-v1_1-data
+  local_path: data/bunny_v1_1/pretrain
+  image_root: data/bunny_v1_1/pretrain/images
+
+llava_instruct_150k:
+  hf_repo: liuhaotian/LLaVA-Instruct-150K
+  local_path: data/llava_instruct_150k
+  image_root: data/coco/train2017
