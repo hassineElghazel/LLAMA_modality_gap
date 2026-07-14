@@ -39,8 +39,10 @@ mkdir -p "$EMB" "$MET" outputs/logs
 # 1) Recover NoCaps references + build the diagnostic manifest (idempotent).
 if [ ! -f data/nocaps/ood_manifest_300.json ]; then
   echo "==================== RECOVER OOD REFS -> MANIFEST ===================="
+  # `|| true`: datasets/pyarrow may crash in the interpreter finalizer AFTER the
+  # manifest is written; the file-existence guard below is the real success check.
   python scripts/prep_ood_refs.py --hf-dataset lmms-lab/NoCaps \
-      --hf-split validation --out-root data/nocaps --n 300 --seed 42 --also-coco-json
+      --hf-split validation --out-root data/nocaps --n 300 --seed 42 --also-coco-json || true
 fi
 if [ ! -f data/nocaps/ood_manifest_300.json ]; then
   echo "[fatal] manifest still missing -- prep_ood_refs.py failed" >&2; exit 1

@@ -150,3 +150,10 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # datasets+pyarrow can crash in the interpreter finalizer (PyGILState_Release)
+    # AFTER all outputs are written, returning a nonzero code that trips
+    # `set -e` in the caller. Everything is on disk by here, so exit hard and
+    # skip the buggy teardown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
