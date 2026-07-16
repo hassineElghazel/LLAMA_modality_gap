@@ -66,6 +66,7 @@ def train_stage2_orientation_pinned(
     btrace0: Optional[float] = None,
     lambda_r: float = 0.0,
     effrank0: Optional[float] = None,
+    text_encoder: Optional[object] = None,
     max_steps: Optional[int] = None,
     progress_cb: Optional[Callable[[int, float, float], None]] = None,
     resume_from: Optional[Path] = None,
@@ -262,9 +263,15 @@ def train_stage2_orientation_pinned(
             else:
                 z_img = vlm.projector(vis[:, 0, :])                   # CLS token (original)
             with torch.no_grad():
-                z_txt = encode_text_mean_pool(
-                    cbatch["captions"], tokenizer, embed_layer, device, max_length=max_cap_len
-                )
+                if text_encoder is not None:
+                    # CLIP-text anchor: InfoNCE positive = frozen CLIP tower + shared
+                    # lift (4096-d). InfoNCE L2-normalises, so this aligns image
+                    # DIRECTIONS to CLIP text directions (scale-invariant).
+                    z_txt = text_encoder.encode(cbatch["captions"]).to(device)
+                else:
+                    z_txt = encode_text_mean_pool(
+                        cbatch["captions"], tokenizer, embed_layer, device, max_length=max_cap_len
+                    )
             z_txt = z_txt.to(dtype=z_img.dtype)
             l_nce = symmetric_infonce(z_img, z_txt, temp())
 

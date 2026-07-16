@@ -82,6 +82,9 @@ CONDITIONS = {
     "Cloc":        {"connector": "outputs/checkpoints/stage2_vlm_Cloc.pt",        "uses_stage2": True},
     # Corient = clean-orientation: InfoNCE drive (lambda_o=0.9) + loc/scale/rank pins (isolate ORIENTATION).
     "Corient":     {"connector": "outputs/checkpoints/stage2_vlm_Corient.pt",     "uses_stage2": True},
+    # CLIP-text-anchor arm: Cloc/Corient retrained toward the frozen CLIP text tower.
+    "Cloc_clip":   {"connector": "outputs/checkpoints/stage2_vlm_Cloc_clip.pt",   "uses_stage2": True},
+    "Corient_clip":{"connector": "outputs/checkpoints/stage2_vlm_Corient_clip.pt","uses_stage2": True},
     # Clocorient = combined: Cloc + Corient dosages -> InfoNCE orientation (lambda_o=0.5)
     # + location CLOSURE to mu_y (lambda_d=0.1) + scale/rank pins (move LOCATION + ORIENTATION jointly).
     "Clocorient":  {"connector": "outputs/checkpoints/stage2_vlm_Clocorient.pt",  "uses_stage2": True},

@@ -41,6 +41,12 @@ def main() -> None:
     p.add_argument("--lift-method", default="semi_orthogonal",
                    choices=["semi_orthogonal", "random"])
     p.add_argument("--proj-seed", type=int, default=42)
+    p.add_argument("--match-norm", type=float, default=None,
+                   help="scale the saved anchor so ||mu_y_clip|| equals this value "
+                        "(e.g. the image centroid norm 177.85). CLIP's semantic DIRECTION "
+                        "is preserved; only the magnitude changes so the direction actually "
+                        "drives Cloc's location move. Cloc-only (Corient's InfoNCE is "
+                        "scale-invariant, reads the unscaled lift). None = native CLIP scale.")
     p.add_argument("--device", default=None, help="override encoders.yaml inference.device")
     p.add_argument("--batch-size", type=int, default=256)
     args = p.parse_args()
@@ -63,6 +69,14 @@ def main() -> None:
 
     cloud = tower.encode(captions, batch_size=args.batch_size).to(torch.float32).cpu()  # (N,4096)
 
+    raw_mu_norm = float(cloud.mean(dim=0).norm())
+    if args.match_norm is not None:
+        s = float(args.match_norm) / max(raw_mu_norm, 1e-12)
+        cloud = cloud * s
+        print(f"[anchor] match-norm: scaled lift output by s={s:.4f} so "
+              f"||mu_y_clip|| {raw_mu_norm:.4f} -> {args.match_norm:.4f} "
+              f"(CLIP direction preserved; magnitude set to image-cloud scale)")
+
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(cloud, str(out_path))
@@ -70,12 +84,10 @@ def main() -> None:
     mu = cloud.mean(dim=0)
     sample_norm = cloud.norm(dim=1).mean()
     print(f"[anchor] saved {tuple(cloud.shape)} -> {out_path}")
-    print(f"[anchor] ||mu_y_clip||={float(mu.norm()):.4f}  "
-          f"mean ||row||={float(sample_norm):.4f}  "
-          f"(semi-orthogonal lift preserves CLIP text_embeds norms)")
+    print(f"[anchor] ||mu_y_clip||={float(mu.norm()):.4f}  mean ||row||={float(sample_norm):.4f}")
     print("[anchor] calibration: Cloc normalises the distance by the frozen image "
-          "trace_x (~4253 for C3pinr). If ||mu_y_clip|| is far from the LLaMA-anchor "
-          "||mu_y||, keep lambda_d fixed for dosage-comparability and note the target moved.")
+          "trace_x (~4253 for C3pinr); keep lambda_d fixed for dosage-comparability. "
+          "The scale only affects Cloc's target — Corient reads the unscaled shared lift.")
 
 
 if __name__ == "__main__":

@@ -154,6 +154,14 @@ def main():
     p.add_argument("--mu-y-source", dest="mu_y_source",
                    default="outputs/embeddings/projected_C3_stage2_text_pooled.pt",
                    help="text-centroid source for --close-location (same as Cloc/C5).")
+    p.add_argument("--clip-text-anchor", dest="clip_text_anchor", action="store_true",
+                   help="swap the live InfoNCE text positive from LLaMA mean-pool to the "
+                        "frozen CLIP text tower + shared lift. InfoNCE normalises, so this "
+                        "aligns image directions to CLIP text directions. Off = byte-identical "
+                        "LLaMA behaviour (old runs reproduce exactly).")
+    p.add_argument("--clip-lift-path", default="outputs/anchors/clip_lift.pt",
+                   help="shared frozen-lift artifact for --clip-text-anchor; must be the SAME "
+                        "one baked into Cloc's mu_y so both models anchor to one CLIP geometry.")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
@@ -272,6 +280,18 @@ def main():
         print(f"[c6] close-location: mu_y loaded from {args.mu_y_source} "
               f"||mu_y||={float(mu_close.norm()):.2f} (lambda_d={lambda_p})")
 
+    # CLIP-text anchor (Corient_clip): frozen CLIP tower + shared lift as the live
+    # InfoNCE positive. Loads the SAME lift artifact baked into Cloc's mu_y so both
+    # models anchor to one identical CLIP geometry. Off => LLaMA mean-pool (unchanged).
+    text_encoder = None
+    if args.clip_text_anchor:
+        from src.encoders.clip_text_encoder import build_clip_text_tower
+        text_encoder = build_clip_text_tower(
+            enc_cfg, out_dim=4096, lift_path=args.clip_lift_path,
+        ).load()
+        print(f"[{run_tag}] CLIP-text anchor ON — InfoNCE positive from CLIP tower "
+              f"(lift={args.clip_lift_path}, W={tuple(text_encoder.W.shape)})")
+
     pins = []
     if args.close_location and lambda_p > 0:
         pins.append(f"loc-CLOSE->mu_y(lambda_d={lambda_p})")
@@ -304,6 +324,7 @@ def main():
             btrace0=float(btrace0) if btrace0 is not None else None,
             lambda_r=lambda_r,
             effrank0=float(effrank0) if effrank0 is not None else None,
+            text_encoder=text_encoder,
             max_steps=args.max_steps,
             resume_from=Path(args.resume) if args.resume else None,
         )

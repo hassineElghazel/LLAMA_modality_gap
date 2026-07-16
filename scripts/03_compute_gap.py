@@ -47,6 +47,8 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # Corient = clean-orientation: InfoNCE drive (lambda_o=0.9) + location-pin +
               # scale-pin + rank-pin (isolate ORIENTATION, hold the other 3 axes).
               "Corient",
+              # CLIP-text-anchor arm: Cloc/Corient retrained toward the frozen CLIP text tower.
+              "Cloc_clip", "Corient_clip",
               # Clocorient = combined: Cloc + Corient dosages in one model -- InfoNCE
               # orientation (lambda_o=0.5) + location CLOSURE to mu_y (lambda_d=0.1) +
               # scale-pin + rank-pin. Moves LOCATION + ORIENTATION jointly, scale/rank held.

@@ -135,6 +135,11 @@ def main():
                    help="image-side pooling for the distance term: 'cls' (token 0, "
                         "original) or 'all257' (mean of all 257 projected tokens = the "
                         "SAME pooled vector G_mu is measured on). Default: config or 'cls'")
+    p.add_argument("--mu-y-source", dest="mu_y_source", default=None,
+                   help="override the text-centroid source (config distance.mu_y_source). "
+                        "Point at the CLIP anchor cloud (outputs/embeddings_1300/"
+                        "clipanchor_text_1300.pt) to close location toward the CLIP text "
+                        "centroid instead of the LLaMA one. mu_y = mean over its rows.")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
@@ -225,8 +230,10 @@ def main():
     image_iter = _image_batches(c_dataset, captions, c_batch)
 
     # ----- frozen geometry targets -----
-    mu_y = _load_mu_y(d_cfg["mu_y_source"], device)
+    mu_y_source = args.mu_y_source or d_cfg["mu_y_source"]
+    mu_y = _load_mu_y(mu_y_source, device)
     trace_x = _resolve_trace_x(d_cfg)
+    print(f"[c5] mu_y source: {mu_y_source}")
     print(f"[c5] mu_y loaded: shape={tuple(mu_y.shape)} ||mu_y||={float(mu_y.norm()):.4f}")
 
     pin = ""
