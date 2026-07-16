@@ -1,0 +1,28 @@
+# DATA-CONFIG for the modality-gap pipeline on the dd256 grounding set (n=1300).
+#
+# Identical to configs/data.yaml except the diagnostic manifest points at the 1300
+# val2017 pairs built by scripts/prep_dd256_gap_manifest.py — the SAME images the
+# dd256 grounding harness scores (configs/description_eval.yaml). This unifies gap
+# geometry and grounding onto one n=1300 set. 07_extract_projected reads only
+# diagnostic_sample.{manifest_path,seed}; the rest is carried for parity.
+
+coco_val2017:
+  image_root: data/coco/val2017
+  annotations_json: data/coco/annotations/captions_val2017.json
+  expected_num_images: 5000
+
+diagnostic_sample:
+  num_pairs: 1300
+  caption_per_image: 1
+  seed: 42
+  manifest_path: data/dd256/gap_manifest_1300.json   # written by prep_dd256_gap_manifest.py
+
+bunny_v1_1:
+  hf_repo: BoyaWu10/Bunny-v1_1-data
+  local_path: data/bunny_v1_1/pretrain
+  image_root: data/bunny_v1_1/pretrain/images
+
+llava_instruct_150k:
+  hf_repo: liuhaotian/LLaVA-Instruct-150K
+  local_path: data/llava_instruct_150k
+  image_root: data/coco/train2017
