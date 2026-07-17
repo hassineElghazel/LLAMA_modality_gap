@@ -49,6 +49,8 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               "Corient",
               # CLIP-text-anchor arm: Cloc/Corient retrained toward the frozen CLIP text tower.
               "Cloc_clip", "Corient_clip",
+              # Cloc_clip_native: location drive toward the CLIP centroid at natural scale (~7.9).
+              "Cloc_clip_native",
               # Clocorient = combined: Cloc + Corient dosages in one model -- InfoNCE
               # orientation (lambda_o=0.5) + location CLOSURE to mu_y (lambda_d=0.1) +
               # scale-pin + rank-pin. Moves LOCATION + ORIENTATION jointly, scale/rank held.
@@ -66,14 +68,23 @@ def main():
     p.add_argument("--condition", required=True, choices=CONDITIONS)
     p.add_argument("--embeddings-dir", default="outputs/embeddings")
     p.add_argument("--out-dir", default="outputs/metrics")
+    p.add_argument("--text-embeddings", default=None,
+                   help="override the text cloud the gap is measured AGAINST (e.g. the CLIP "
+                        "anchor outputs/embeddings_1300/clipanchor_text_1300.pt). G_mu and the "
+                        "cross-cloud metrics are then computed vs THIS cloud -- the 'real' "
+                        "location gap for a CLIP-anchor-trained model (the flag it walked to). "
+                        "Default: the condition's own LLaMA text_pooled.")
+    p.add_argument("--out-suffix", default="",
+                   help="append to the output filename (e.g. _vsCLIP) so a vs-CLIP gap does "
+                        "not overwrite the default gap_<cond>.json.")
     args = p.parse_args()
 
     img_path, txt_path = _embed_paths(args.condition, Path(args.embeddings_dir))
     X = torch.load(img_path)
-    Y = torch.load(txt_path)
+    Y = torch.load(args.text_embeddings) if args.text_embeddings else torch.load(txt_path)
     metrics = compute_all_metrics(X, Y)
 
-    out_path = Path(args.out_dir) / f"gap_{args.condition}.json"
+    out_path = Path(args.out_dir) / f"gap_{args.condition}{args.out_suffix}.json"
     save_json(metrics.to_dict(), out_path)
     spec = metrics.to_dict()["spec_metrics"]
     print(
@@ -82,6 +93,8 @@ def main():
         f"JS={spec['js_divergence_angular']:.4f}  "
         f"knn={spec['knn_mixing_rate_k20']:.4f}"
     )
+    if args.text_embeddings:
+        print(f"[ok] gap measured vs text cloud: {args.text_embeddings}")
     print(f"[ok] wrote {out_path}")
 
 

@@ -85,6 +85,9 @@ CONDITIONS = {
     # CLIP-text-anchor arm: Cloc/Corient retrained toward the frozen CLIP text tower.
     "Cloc_clip":   {"connector": "outputs/checkpoints/stage2_vlm_Cloc_clip.pt",   "uses_stage2": True},
     "Corient_clip":{"connector": "outputs/checkpoints/stage2_vlm_Corient_clip.pt","uses_stage2": True},
+    # Cloc_clip_native: location drive toward the CLIP centroid at its NATURAL scale
+    # (~7.9, near origin) -- no --match-norm. Faithful drop-in vs original Cloc.
+    "Cloc_clip_native": {"connector": "outputs/checkpoints/stage2_vlm_Cloc_clip_native.pt", "uses_stage2": True},
     # Clocorient = combined: Cloc + Corient dosages -> InfoNCE orientation (lambda_o=0.5)
     # + location CLOSURE to mu_y (lambda_d=0.1) + scale/rank pins (move LOCATION + ORIENTATION jointly).
     "Clocorient":  {"connector": "outputs/checkpoints/stage2_vlm_Clocorient.pt",  "uses_stage2": True},
