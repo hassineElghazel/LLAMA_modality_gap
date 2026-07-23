@@ -137,10 +137,10 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/15_clipscore.py \
     || echo "[corient] clipscore FAILED (non-fatal; rerun 15_clipscore.py --config $DESC_CFG --condition Corient_clip_dd256)"
 
 # --- CHAIR across BOTH CLIP-anchor arms vs baseline (Cloc_clip already done) ---
-python scripts/19_chair.py --conditions Cloc_clip_dd256 Corient_clip_dd256 \
+python scripts/19_chair.py --conditions Cloc_clip_native_dd256 Corient_clip_dd256 \
     --baseline C3pinr_dd256 --config "$DESC_CFG" \
     --out outputs/metrics/chair_summary_clip_anchor.json \
-    || echo "[corient] CHAIR FAILED (non-fatal; ensure C3pinr_dd256 + Cloc_clip_dd256 predictions exist)"
+    || echo "[corient] CHAIR FAILED (non-fatal; ensure C3pinr_dd256 + Cloc_clip_native_dd256 predictions exist)"
 
 tg_notify "✅ *CORIENT-CLIP complete* (job \`${SLURM_JOB_ID}\`)
 gap: outputs/metrics_1300/gap_Corient_clip.json
