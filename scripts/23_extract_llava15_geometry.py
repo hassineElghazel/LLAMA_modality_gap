@@ -53,7 +53,7 @@ def main() -> None:
     pairs = load_diagnostic_manifest(data_cfg["diagnostic_sample"]["manifest_path"])
     print(f"[llava15-geo] {len(pairs)} pairs from {data_cfg['diagnostic_sample']['manifest_path']}")
 
-    from transformers import AutoProcessor, LlavaForConditionalGeneration
+    from transformers import AutoImageProcessor, AutoProcessor, LlavaForConditionalGeneration
     load_kwargs: dict = dict(torch_dtype=torch.float16, low_cpu_mem_usage=True, device_map={"": 0})
     if args.load_4bit:
         from transformers import BitsAndBytesConfig
@@ -61,6 +61,12 @@ def main() -> None:
             load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16)
     model = LlavaForConditionalGeneration.from_pretrained(args.model_id, **load_kwargs).eval()
     processor = AutoProcessor.from_pretrained(args.model_id)
+    # Call the image processor directly: this transformers version's LlavaProcessor.__call__
+    # dereferences text[0] even when text=None, so processor(images=...) crashes. The image
+    # processor has no text branch and yields the identical pixel_values.
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        image_processor = AutoImageProcessor.from_pretrained(args.model_id)
     tok = processor.tokenizer
     embed = model.get_input_embeddings()                       # Vicuna embed_tokens
     vfl = getattr(model.config, "vision_feature_layer", -2)
@@ -86,7 +92,7 @@ def main() -> None:
             captions = [pr.caption for pr in batch]
 
             # ---- image side: connector output, pooled over 576 tokens ----
-            pv = processor(images=images, return_tensors="pt").pixel_values.to("cuda", torch.float16)
+            pv = image_processor(images=images, return_tensors="pt").pixel_values.to("cuda", torch.float16)
             img_rows.append(image_features(pv).to(torch.float64).cpu())
 
             # ---- text side: Vicuna embed_tokens, content-mean (excl BOS/EOS/pad) ----
