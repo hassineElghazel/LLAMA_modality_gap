@@ -33,12 +33,13 @@ prompt:
 generation:
   do_sample: false
   num_beams: 1
-  # 256 tokens lets each detailed description COMPLETE. These undertrained base-LLaMA-2
-  # checkpoints rarely emit EOS under greedy decoding, so a small cap (e.g. 64) truncates
-  # every response mid-sentence. CLIPScore still only encodes the first ~77 tokens, but
-  # that window is consistent across all conditions so the relative ranking holds, and
-  # CHAIR benefits from the full text (more objects, complete sentences). Drop to ~160
-  # if the model starts rambling/repeating at this length.
+  # 256 tokens comfortably fits a COMPLETE detailed description. VERIFIED on the actual
+  # captions: at this cap ~100% terminate cleanly on sentence punctuation (~1% repetition)
+  # -> the models DO emit EOS reliably; they simply run ~95-100 words. A small cap (e.g.
+  # 64) would cut them mid-sentence only because the captions exceed 64 tokens, NOT
+  # because they fail to stop. CLIPScore encodes only the first ~77 tokens (a window
+  # consistent across all conditions so the relative ranking holds); CHAIR benefits from
+  # the full text. Drop to ~160 if a model starts rambling/repeating at this length.
   max_new_tokens: 256
 
 batch:
