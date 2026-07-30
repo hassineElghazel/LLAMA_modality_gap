@@ -1,0 +1,86 @@
+# 3-arm fine-tune of pretrained LLaVA-1.5-7B on UNSEEN DOCCI detail captions.
+#
+# ONE recipe, three arms (set with --arm on scripts/26_finetune_llava_3arm.py);
+# the arms differ ONLY in the geometry lambdas on the pooled-576 connector output:
+#
+#   arm=vanilla   lambda_d=0   lambda_s=0   lambda_r=0   (= C3 analog; geometry free to drift)
+#   arm=pinned    lambda_d=0   lambda_s=1   lambda_r=1   (= C3pinr analog; scale+rank held, no location move)
+#   arm=location  lambda_d=0.1 lambda_s=1   lambda_r=1   (= Cloc analog; location driven, scale+rank held)
+#
+# Loss (ported verbatim from src/training/stage2_distance_sft.py, convex so
+# lambda_d is comparable and lambda_d=0 reduces to pure AR):
+#   L = (1 - lambda_d)*L_AR + lambda_d*L_dist + lambda_s*L_scale + lambda_r*L_rank
+#   L_dist  = || mean_b(z_img) - mu_y ||^2 / trace_x        (z_img = mean_576(connector(vis)))
+#   L_scale = (btrace / btrace0 - 1)^2                       (btrace0 auto-captured at step 1)
+#   L_rank  = (PR / effrank0 - 1)^2                          (effrank0 auto-captured at step 1)
+#
+# AR side / LoRA / optimizer / schedule mirror configs/training_c5.yaml so the
+# LLaVA arms replicate the diagnostic Cloc recipe. NOTE (verified against
+# training_c5.yaml, NOT memory): the diagnostic LoRA is r=8/alpha=16 targeting
+# q_proj/v_proj/o_proj -- memory's "r16/alpha32" was stale.
+
+model:
+  model_id: llava-hf/llava-1.5-7b-hf
+  load_4bit: true                 # QLoRA: 4-bit base LLM; vision_tower + connector kept fp16
+  # LoRA is scoped to the LANGUAGE MODEL only at runtime (the CLIP vision tower
+  # also has q_proj/v_proj; scripts/26 introspects module names to exclude it).
+
+data:
+  dataset: docci
+  train_manifest: data/docci/train_manifest.json   # 9,647 (written by 24_prep_docci.py)
+  max_caption_tokens: 256          # cap the long DOCCI answer to bound memory
+
+freeze:
+  vit: true                        # vision_tower frozen (encode under no_grad in the geometry step)
+  connector: false                 # multi_modal_projector TRAINABLE (must move for the location term)
+  llm: true                        # base LLM frozen; only LoRA adapters train
+
+# Geometry term acts on the pooled-576 connector output (control == measurement:
+# the SAME vector G_mu is measured on and the decoder ingests; batch-mean gradient
+# is a uniform translation -> closes location WITHOUT compressing trace by construction).
+distance:
+  batch_size: 32                   # image batch for the geometry leg (vision under no_grad -> fits 11GB alongside the 4-bit 7B)
+  pool: all576                     # mean over the 576 projected image tokens
+  # Frozen targets precomputed by scripts/25_precompute_llava_anchors.py on DOCCI-train:
+  mu_y_source: outputs/anchors_docci/mu_y.pt              # (4096,) Vicuna embed content-mean
+  trace_x_source: outputs/anchors_docci/anchors.json     # reads {"trace_x": ...}
+  trace_x: null                    # fallback scalar if trace_x_source is absent
+
+lora:
+  enabled: true
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, v_proj, o_proj]   # language_model only (scoped in 26)
+  bias: none
+
+optimizer:
+  name: adamw
+  lr: 2.0e-4
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+schedule:
+  warmup_ratio: 0.03
+  type: cosine
+  num_epochs: 1
+
+batch:
+  per_device_batch_size: 1         # 576 image tokens + long caption -> B=1 on the 2080ti
+  gradient_accumulation_steps: 16  # eff. AR batch 16
+
+precision:
+  amp: fp16                        # 2080ti (Turing) has no bf16 tensor cores; geometry math is fp32 internally
+
+logging:
+  log_every_steps: 5
+  save_every_steps: 200
+  notify_every_steps: 200
+
+output:
+  # Per-arm dir is set with --arm (e.g. outputs/checkpoints/llava_docci_location/).
+  checkpoint_root: outputs/checkpoints
+  log_dir: outputs/logs/llava_docci
+
+seed: 42
