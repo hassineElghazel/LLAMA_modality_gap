@@ -10,8 +10,9 @@
 #SBATCH --error=outputs/logs/docci_prep_%j.err
 
 # Materialize DOCCI train (9,647) + test (5,000) to data/docci/ (images + manifests
-# + references). Needs network for the FIRST run (load_dataset downloads google/docci);
-# afterwards the HF cache serves it. Do NOT set HF_HUB_OFFLINE on the first run.
+# + references). Downloads DOCCI's official public files directly from Google Cloud
+# Storage (storage.googleapis.com/docci) -- needs outbound network on this node.
+# Re-runnable: cached downloads in data/docci/_raw and existing images are skipped.
 set -Eeuo pipefail
 echo "[slurm] job=${SLURM_JOB_ID} node=$(hostname) started $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
