@@ -16,8 +16,10 @@
 #     sbatch --export=ALL,ARM=location scripts/submit_llava_eval.sbatch
 #
 # Metric families (DOCCI-test, n=5000):
-#   reference-free : CLIPScore (15) + SigLIP (15b)
-#   reference-based: single-gold SPICE/METEOR vs DOCCI description (28)
+#   reference-free : CLIPScore (15) + SigLIP (15b; needs sentencepiece+protobuf)
+#   reference-based: single-gold BLEU/CIDEr/METEOR vs DOCCI description (28, --no-spice).
+#   SPICE dropped on DOCCI: its Stanford parser OOMs per-sentence on DOCCI's long
+#   captions (135-354 tok) and NPE-crashes; METEOR is the single-ref metric here.
 # NOTE: COCO/dd256 eval is intentionally dropped (DOCCI-only study). That also
 # drops hallucination (CHAIR): CHAIR needs COCO-80 instance annotations and
 # cannot be computed on DOCCI. If hallucination is wanted later, run 19_chair.py
@@ -61,7 +63,7 @@ python scripts/15b_siglip_score.py --config "${DOCCI}" --condition "${ARM}_docci
 
 # ---------------- reference-based (DOCCI single gold: SPICE/METEOR) ----------------
 # Circular vs Arm0 (arms 1-3 trained on DOCCI style) but FAIR between the geometry arms.
-python scripts/28_score_docci_refs.py --config "${DOCCI}" --tag "${ARM}_docci" \
+python scripts/28_score_docci_refs.py --config "${DOCCI}" --tag "${ARM}_docci" --no-spice \
     || echo "[eval] ${ARM}_docci DOCCI-ref scoring FAILED (non-fatal; needs Java)"
 
 echo "[slurm] llava-eval ${ARM} complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
