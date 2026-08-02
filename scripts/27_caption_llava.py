@@ -100,7 +100,8 @@ def main() -> None:
     if args.load_4bit:
         from transformers import BitsAndBytesConfig
         load_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16)
+            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16,
+            llm_int8_skip_modules=["multi_modal_projector"])   # keep connector fp16 (matches training in 26); trained connector.pt loads into it
     model = LlavaForConditionalGeneration.from_pretrained(args.model_id, **load_kwargs)
 
     # --- load trained connector (before attaching the adapter) ---
