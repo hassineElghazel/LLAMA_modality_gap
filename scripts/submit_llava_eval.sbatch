@@ -52,7 +52,7 @@ if [ "${ARM}" != "arm0" ]; then
 fi
 
 # ---------------- caption DOCCI-test ----------------
-python scripts/27_caption_llava.py --eval-config "${DOCCI}" --tag "${ARM}_docci" "${ADAPTER_FLAGS[@]}"
+python scripts/27_caption_llava.py --eval-config "${DOCCI}" --tag "${ARM}_docci" --batch-size 8 "${ADAPTER_FLAGS[@]}"
 
 # ---------------- reference-free (DOCCI) ----------------
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/15_clipscore.py \

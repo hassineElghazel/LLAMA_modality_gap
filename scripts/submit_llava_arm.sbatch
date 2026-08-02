@@ -77,7 +77,7 @@ $(cat ${CKPT}/train_sidecar.json 2>/dev/null | head -c 400)"
 
 # ---------------- 3. caption DOCCI-test with this arm ----------------
 python scripts/27_caption_llava.py --eval-config "${DOCCI}" --tag "${ARM}_docci" \
-    --adapter-dir "${CKPT}" --connector-path "${CKPT}/connector.pt"
+    --batch-size 8 --adapter-dir "${CKPT}" --connector-path "${CKPT}/connector.pt"
 
 # ---------------- 4. score (all non-fatal so one metric can't sink the row) ----------------
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/15_clipscore.py \
