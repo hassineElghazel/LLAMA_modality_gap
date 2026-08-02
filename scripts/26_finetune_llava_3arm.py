@@ -288,7 +288,7 @@ def main() -> None:
         "n_train_examples": len(items), "lora_targets": len(lora_targets),
     }
     save_json(sidecar, out_dir / "train_sidecar.json")
-    snapshot_run_metadata(cfg, out_dir, config_files=[args.config])
+    snapshot_run_metadata(cfg, out_dir, config_files={"train": args.config})
     print(f"[3arm] done -> {out_dir}  (adapter + connector.pt + train_sidecar.json)")
 
 
