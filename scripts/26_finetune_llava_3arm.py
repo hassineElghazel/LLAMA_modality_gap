@@ -4,16 +4,31 @@ Ports the diagnostic Cloc loss (src/training/stage2_distance_sft.py) onto the HF
 LlavaForConditionalGeneration stack. ONE recipe, three arms selected with --arm;
 they differ ONLY in the geometry lambdas on the pooled-576 connector output:
 
-    vanilla   lambda_d=0.0  lambda_s=0.0  lambda_r=0.0   (C3 analog)
-    pinned    lambda_d=0.0  lambda_s=1.0  lambda_r=1.0   (C3pinr analog)
-    location  lambda_d=0.1  lambda_s=1.0  lambda_r=1.0   (Cloc analog)
+    vanilla   lambda_d=0.0  lambda_p=0.0   lambda_s=0.0  lambda_r=0.0   (C3 analog)
+    pinned    lambda_d=0.0  lambda_p=10.0  lambda_s=1.0  lambda_r=1.0   (C3pinr analog)
+    location  lambda_d=0.1  lambda_p=0.0   lambda_s=1.0  lambda_r=1.0   (Cloc analog)
 
-Loss (convex; lambda_d=0 -> pure AR):
-    L = (1-lambda_d)*L_AR + lambda_d*L_dist + lambda_s*L_scale + lambda_r*L_rank
+Loss (convex in the AR/drive split; lambda_d=0 and lambda_p=0 -> pure AR):
+    L = (1-lambda_d)*L_AR + lambda_d*L_dist
+        + lambda_p*L_pin + lambda_s*L_scale + lambda_r*L_rank
     z_img   = mean_576( connector(vision(image)) )          (B, 4096)
-    L_dist  = || mean_b(z_img) - mu_y ||^2 / trace_x         (frozen mu_y, trace_x)
-    L_scale = (btrace / btrace0 - 1)^2                        (btrace0 captured @ step 1)
-    L_rank  = (PR / effrank0 - 1)^2                           (effrank0 captured @ step 1)
+    L_dist  = || mean_b(z_img) - mu_y  ||^2 / trace_x        location DRIVE  -> mu_y
+    L_pin   = || mean_b(z_img) - mu_x0 ||^2 / trace_x        location PIN    -> pretrained centroid
+    L_scale = (btrace / btrace0  - 1)^2                       scale pin
+    L_rank  = (PR     / effrank0 - 1)^2                       rank pin
+All four anchors (mu_y, mu_x0, btrace0, effrank0, trace_x) are FROZEN and read from
+scripts/25's outputs -- none is captured live, so every arm optimises against an
+identical, reproducible target set.
+
+WHY THE LOCATION PIN EXISTS (it is not decoration). L_scale and L_rank are both
+computed on batch-CENTRED data (zf - zbar), hence translation-invariant: they are
+mathematically blind to where the cloud sits. Without L_pin the "pinned" arm has
+NOTHING bounding its centroid, so plain AR training drags location freely and the
+baseline is an uncontrolled variable rather than a held one. The diagnostic C3pinr
+this arm mirrors pinned location explicitly (--lambda-p 10), which is why every
+pinned C condition sits at G_mu ~177.7 while unpinned C3 drifts to 245.
+The pin is an additive GUARD (like scale/rank), so it does not take from the AR
+budget: w_ar = 1 - lambda_d exactly as before.
 
 Geometry step: vision_tower runs under no_grad (frozen), ONLY the connector is
 in-graph -> the batch-mean gradient is a pure translation of the image cloud, and
@@ -45,9 +60,9 @@ from src.data.docci_loader import load_docci_manifest
 from src.utils.io import load_yaml, save_json, snapshot_run_metadata
 
 ARM_LAMBDAS = {
-    "vanilla":  dict(lambda_d=0.0, lambda_s=0.0, lambda_r=0.0),
-    "pinned":   dict(lambda_d=0.0, lambda_s=1.0, lambda_r=1.0),
-    "location": dict(lambda_d=0.1, lambda_s=1.0, lambda_r=1.0),
+    "vanilla":  dict(lambda_d=0.0, lambda_p=0.0,  lambda_s=0.0, lambda_r=0.0),
+    "pinned":   dict(lambda_d=0.0, lambda_p=10.0, lambda_s=1.0, lambda_r=1.0),
+    "location": dict(lambda_d=0.1, lambda_p=0.0,  lambda_s=1.0, lambda_r=1.0),
 }
 
 
@@ -82,17 +97,21 @@ def main() -> None:
     ap.add_argument("--arm", required=True, choices=sorted(ARM_LAMBDAS))
     ap.add_argument("--max-steps", type=int, default=None, help="Debug cap on optimizer steps.")
     ap.add_argument("--out-dir", default=None, help="Override checkpoint dir.")
+    ap.add_argument("--lambda-p", type=float, default=None,
+                    help="Override the arm's location-pin weight (default: arm table).")
     args = ap.parse_args()
 
     cfg = load_yaml(args.config)
     lam = ARM_LAMBDAS[args.arm]
     lambda_d, lambda_s, lambda_r = lam["lambda_d"], lam["lambda_s"], lam["lambda_r"]
+    lambda_p = lam["lambda_p"] if args.lambda_p is None else float(args.lambda_p)
     seed = int(cfg.get("seed", 42))
     random.seed(seed); torch.manual_seed(seed)
 
     out_dir = Path(args.out_dir or (Path(cfg["output"]["checkpoint_root"]) / f"llava_docci_{args.arm}"))
     out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[3arm] arm={args.arm}  lambda_d={lambda_d} lambda_s={lambda_s} lambda_r={lambda_r}")
+    print(f"[3arm] arm={args.arm}  lambda_d={lambda_d} lambda_p={lambda_p} "
+          f"lambda_s={lambda_s} lambda_r={lambda_r}")
     print(f"[3arm] out_dir={out_dir}")
 
     # ---- data ----
@@ -101,14 +120,43 @@ def main() -> None:
     instruction = "Describe the following image in detail."
     max_cap = int(cfg["data"].get("max_caption_tokens", 256))
 
-    # ---- anchors (frozen) ----
+    # ---- anchors (ALL frozen, all from scripts/25; nothing captured live) ----
     dcfg = cfg["distance"]
     mu_y = torch.load(dcfg["mu_y_source"]).float().cuda()          # (4096,)
+    anchors: dict = {}
     if dcfg.get("trace_x_source"):
-        trace_x = float(json.loads(Path(dcfg["trace_x_source"]).read_text())["trace_x"])
+        anchors = json.loads(Path(dcfg["trace_x_source"]).read_text())
+        trace_x = float(anchors["trace_x"])
     else:
         trace_x = float(dcfg["trace_x"])
-    print(f"[3arm] anchors: ||mu_y||={float(mu_y.norm()):.3f}  trace_x={trace_x:.3f}")
+
+    # location-pin target: the pretrained image centroid (mu_x0). Required by any arm
+    # with lambda_p > 0; re-run scripts/25 if the file predates the pin.
+    mu_x0 = None
+    mu_x0_path = Path(dcfg.get("mu_x0_source") or (Path(dcfg["mu_y_source"]).parent / "mu_x0.pt"))
+    if mu_x0_path.exists():
+        mu_x0 = torch.load(mu_x0_path).float().cuda()
+    elif lambda_p > 0.0:
+        raise FileNotFoundError(
+            f"arm={args.arm} needs the location pin but {mu_x0_path} is missing. "
+            "Re-run scripts/25_precompute_llava_anchors.py to emit mu_x0.pt.")
+
+    # scale/rank setpoints: frozen, batch-matched estimates from scripts/25. Falling back
+    # to a step-1 capture is supported for old anchor files but is NOT preferred -- a single
+    # 32-image draw is a noisy setpoint to hold for the whole run.
+    btrace0 = anchors.get("btrace0")
+    effrank0 = anchors.get("effrank0")
+    anchors_have_pins = btrace0 is not None and effrank0 is not None
+    mu_x0_desc = f"||mu_x0||={float(mu_x0.norm()):.3f}" if mu_x0 is not None else "mu_x0=absent"
+    print(f"[3arm] anchors: ||mu_y||={float(mu_y.norm()):.3f}  {mu_x0_desc}  trace_x={trace_x:.3f}")
+    if anchors_have_pins:
+        print(f"[3arm] pin setpoints (frozen, {anchors.get('n_anchor_batches','?')} batches of "
+              f"{anchors.get('geo_batch_size','?')}): btrace0={btrace0:.4f} effrank0={effrank0:.4f}")
+    else:
+        print("[3arm] WARNING: anchors.json has no btrace0/effrank0 -> falling back to a "
+              "single step-1 capture (noisy setpoint; re-run scripts/25 to fix).")
+    if anchors.get("G_mu_norm_pretrained") is not None:
+        print(f"[3arm] pretrained location gap (normalised) = {anchors['G_mu_norm_pretrained']:.3f}")
 
     # ---- model (4-bit LLM; connector kept fp + trainable) ----
     from transformers import (AutoProcessor, BitsAndBytesConfig,
@@ -188,10 +236,13 @@ def main() -> None:
     geo_bs = int(dcfg["batch_size"])
     use_scale = lambda_s > 0.0
     use_rank = lambda_r > 0.0
-    run_geo = (lambda_d > 0.0) or use_scale or use_rank
-    w_ar = 1.0 - lambda_d
-    btrace0: float | None = None
-    effrank0: float | None = None
+    use_pin = lambda_p > 0.0
+    run_geo = (lambda_d > 0.0) or use_pin or use_scale or use_rank
+    w_ar = 1.0 - lambda_d          # the PIN is an additive guard, it does not tax AR
+    if anchors.get("geo_batch_size") not in (None, geo_bs):
+        print(f"[3arm] WARNING: anchors were estimated at batch {anchors['geo_batch_size']} "
+              f"but distance.batch_size={geo_bs} -> pin setpoints are biased. Re-run scripts/25 "
+              f"with --geo-batch-size {geo_bs}.")
 
     def ar_micro(item) -> torch.Tensor:
         """AR captioning loss for one example (prompt masked to -100)."""
@@ -221,20 +272,23 @@ def main() -> None:
         z = pooled_image_tokens(pv)
         zf = z.float()
         zbar = zf.mean(dim=0)
+        # location DRIVE (-> mu_y) and location PIN (-> mu_x0). Same form, different target;
+        # both are pure translations of the image cloud (identical gradient on every token).
         l_dist = ((zbar - mu_y) ** 2).sum() / trace_x
-        # scale
+        l_pin = (((zbar - mu_x0) ** 2).sum() / trace_x) if mu_x0 is not None else zf.new_zeros(())
+        # scale (translation-invariant: computed on centred data)
         btrace = ((zf - zbar) ** 2).sum(dim=1).mean()
         if use_scale and btrace0 is None:
             btrace0 = float(btrace.detach())
         l_scale = ((btrace / btrace0 - 1.0) ** 2) if use_scale else zf.new_zeros(())
-        # rank (participation ratio of the centered batch Gram)
+        # rank (participation ratio of the centred batch Gram; also translation-invariant)
         zc = zf - zbar
         G = zc @ zc.t()
         pr = torch.diagonal(G).sum() ** 2 / (G * G).sum().clamp_min(1e-12)
         if use_rank and effrank0 is None:
             effrank0 = float(pr.detach())
         l_rank = ((pr / effrank0 - 1.0) ** 2) if use_rank else zf.new_zeros(())
-        return l_dist, l_scale, l_rank
+        return l_dist, l_pin, l_scale, l_rank, btrace, pr
 
     # ---- train loop ----
     model.train()
@@ -255,13 +309,17 @@ def main() -> None:
             scaler.scale(w_ar * loss / accum).backward()
             ar_val += float(loss.detach()) / accum
 
-        gd = gs = gr = 0.0
+        gd = gp = gs = gr = 0.0
+        gbt = gpr = float("nan")
         if run_geo:
             with torch.cuda.amp.autocast(dtype=torch.float16):
-                l_dist, l_scale, l_rank = geo_losses()
-                geo = lambda_d * l_dist + lambda_s * l_scale + lambda_r * l_rank
+                l_dist, l_pin, l_scale, l_rank, btrace, pr = geo_losses()
+                geo = (lambda_d * l_dist + lambda_p * l_pin
+                       + lambda_s * l_scale + lambda_r * l_rank)
             scaler.scale(geo).backward()
-            gd, gs, gr = float(l_dist.detach()), float(l_scale.detach()), float(l_rank.detach())
+            gd, gp = float(l_dist.detach()), float(l_pin.detach())
+            gs, gr = float(l_scale.detach()), float(l_rank.detach())
+            gbt, gpr = float(btrace.detach()), float(pr.detach())
 
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
@@ -270,9 +328,17 @@ def main() -> None:
         sched.step()
 
         if step % log_every == 0 or step == total_steps - 1:
-            print(f"[{step:04d}/{total_steps}] AR={ar_val:.4f} "
-                  f"dist={gd:.4f} scale={gs:.5f} rank={gr:.5f} lr={sched.get_last_lr()[0]:.2e}",
-                  flush=True)
+            # nG   = ||zbar - mu_y ||/sqrt(trace_x) -- the normalised LOCATION GAP, directly
+            #        comparable to the diagnostic table (open ~2.7, closed ~0.45).
+            # drift= ||zbar - mu_x0||/sqrt(trace_x) -- how far location has moved from the
+            #        pretrained centroid. The pinned arm must hold this near 0.
+            n_g = gd ** 0.5
+            drift = gp ** 0.5
+            geo_msg = (f"| nG={n_g:.3f} drift={drift:.3f} "
+                       f"| dist={gd:.4f} pin={gp:.4f} scale={gs:.5f} rank={gr:.5f} "
+                       f"| btrace={gbt:.2f} PR={gpr:.2f} ") if run_geo else "| geo=off "
+            print(f"[{step:04d}/{total_steps}] AR={ar_val:.4f} {geo_msg}"
+                  f"lr={sched.get_last_lr()[0]:.2e}", flush=True)
         if save_every and (step + 1) % save_every == 0:
             model.save_pretrained(out_dir)                          # adapter
             torch.save(connector.state_dict(), out_dir / "connector.pt")  # + connector (crash-safe)
@@ -281,11 +347,24 @@ def main() -> None:
     model.save_pretrained(out_dir)                                  # LoRA adapter
     torch.save(connector.state_dict(), out_dir / "connector.pt")    # trained connector
     sidecar = {
-        "arm": args.arm, "lambda_d": lambda_d, "lambda_s": lambda_s, "lambda_r": lambda_r,
+        "arm": args.arm,
+        "lambda_d": lambda_d, "lambda_p": lambda_p,
+        "lambda_s": lambda_s, "lambda_r": lambda_r,
         "total_steps": total_steps, "accum": accum, "geo_batch_size": geo_bs,
         "btrace0": btrace0, "effrank0": effrank0, "trace_x": trace_x,
-        "mu_y_source": dcfg["mu_y_source"], "model_id": model_id, "seed": seed,
+        "anchors_pins_frozen": bool(anchors_have_pins),
+        "mu_y_source": dcfg["mu_y_source"],
+        "mu_x0_source": str(mu_x0_path) if mu_x0 is not None else None,
+        "model_id": model_id, "seed": seed,
         "n_train_examples": len(items), "lora_targets": len(lora_targets),
+        # final-step geometry, normalised so it reads on the diagnostic scale
+        # (open ~2.7, closed ~0.45). first_* is step 0 of THIS run.
+        "final_AR": ar_val,
+        "final_G_mu_norm": (gd ** 0.5) if run_geo else None,
+        "final_pin_drift_norm": (gp ** 0.5) if run_geo else None,
+        "final_btrace": gbt if run_geo else None,
+        "final_PR": gpr if run_geo else None,
+        "pretrained_G_mu_norm": anchors.get("G_mu_norm_pretrained"),
     }
     save_json(sidecar, out_dir / "train_sidecar.json")
     snapshot_run_metadata(cfg, out_dir, config_files={"train": args.config})

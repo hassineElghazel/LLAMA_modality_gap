@@ -60,7 +60,8 @@ def main() -> None:
 
     from transformers import AutoProcessor, BitsAndBytesConfig, LlavaForConditionalGeneration
     bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                             bnb_4bit_compute_dtype=torch.float16)
+                             bnb_4bit_compute_dtype=torch.float16,
+                             llm_int8_skip_modules=["multi_modal_projector"])  # keep connector fp16 so trained connector.pt loads (matches 26/27)
     model = LlavaForConditionalGeneration.from_pretrained(
         args.model_id, quantization_config=bnb, torch_dtype=torch.float16,
         low_cpu_mem_usage=True, device_map={"": 0})

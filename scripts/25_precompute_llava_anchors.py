@@ -1,18 +1,34 @@
 """Precompute the FROZEN geometry anchors for the LLaVA 3-arm fine-tune.
 
-Two quantities, both estimated on DOCCI-train with the PRETRAINED LLaVA-1.5
-(no adapter, no connector edit) so they are fixed targets the fine-tune moves
-toward / holds against:
+All quantities are estimated on DOCCI-train with the PRETRAINED LLaVA-1.5 (no
+adapter, no connector edit) so they are fixed targets the fine-tune moves toward
+/ holds against:
 
-  mu_y   : the text centroid the location term pulls the image centroid to.
+  mu_y   : the text centroid the location DRIVE pulls the image centroid to.
            = mean over train captions of the per-caption content-mean of Vicuna
            embed_tokens (BOS/EOS/pad excluded) -- IDENTICAL text-side definition
            to scripts/23. Shape (4096,). Saved to mu_y.pt.
+
+  mu_x0  : the pretrained IMAGE centroid the location PIN holds the cloud at.
+           = mean over train images of z_img. Shape (4096,). Saved to mu_x0.pt.
+           This is the direct analog of the diagnostic C3pinr pin target: the
+           pinned arm must hold location HERE, not merely leave it unconstrained
+           (scale/rank act on centered data and are translation-invariant, so
+           without this term nothing bounds the centroid and AR drags it freely).
 
   trace_x: the frozen denominator of L_dist = ||mean_b(z_img)-mu_y||^2 / trace_x.
            z_img = mean over the 576 projected image tokens (connector output).
            trace_x = mean_i || x_i - mean_i(x) ||^2  over train images
            = ((X - X.mean(0))**2).sum(1).mean(). Saved to anchors.json.
+
+  btrace0 / effrank0 : the scale- and rank-pin setpoints. Estimated as the MEAN
+           over `--n-anchor-batches` random batches of size `--geo-batch-size`,
+           i.e. under the SAME sampling distribution the pin sees at train time.
+           A batch statistic is a biased estimate of its full-cloud counterpart
+           (batch-centred sum-of-squares carries a (1-1/B) factor; participation
+           ratio of a B-sample Gram is bounded by B), so matching the estimator
+           to the pin removes a systematic offset that would otherwise ask the
+           model to inflate trace / rank by a few percent for the whole run.
 
 Making L_dist dimensionless via a FROZEN trace keeps the location gradient a pure
 translation (it cannot game the objective by shrinking the cloud -- that is what
@@ -45,6 +61,12 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--max-images", type=int, default=None,
                    help="Cap images used for trace_x (default: all train images).")
+    p.add_argument("--geo-batch-size", type=int, default=32,
+                   help="Geometry batch size the pins will use at train time "
+                        "(must match distance.batch_size in the training config).")
+    p.add_argument("--n-anchor-batches", type=int, default=500,
+                   help="Random batches averaged to estimate btrace0 / effrank0.")
+    p.add_argument("--seed", type=int, default=42)
     p.add_argument("--load-4bit", dest="load_4bit", action="store_true", default=True)
     p.add_argument("--no-4bit", dest="load_4bit", action="store_false")
     args = p.parse_args()
@@ -110,26 +132,62 @@ def main() -> None:
             pv = image_processor(images=images, return_tensors="pt").pixel_values.to("cuda", torch.float16)
             img_rows.append(image_features(pv).to(torch.float64).cpu())
     X = torch.cat(img_rows, dim=0)                              # (N, 4096)
-    Xc = X - X.mean(dim=0, keepdim=True)
+    mu_x0 = X.mean(dim=0)                                       # (4096,) pretrained image centroid
+    Xc = X - mu_x0
     trace_x = float((Xc ** 2).sum(dim=1).mean())
+
+    # ---- btrace0 / effrank0 : batch statistics under the TRAIN-TIME sampling law ----
+    # Sampled straight from the materialised cloud X (no extra model passes). Mean over
+    # many random batches, so the pin setpoint is unbiased for the estimator the pin uses
+    # and free of the single-draw noise a step-1 capture would bake in for the whole run.
+    gen = torch.Generator().manual_seed(args.seed)
+    gbs = min(args.geo_batch_size, X.shape[0])
+    btr_s, pr_s = [], []
+    for _ in range(args.n_anchor_batches):
+        idx = torch.randperm(X.shape[0], generator=gen)[:gbs]
+        B = X[idx]
+        Bc = B - B.mean(dim=0, keepdim=True)
+        btr_s.append(float((Bc ** 2).sum(dim=1).mean()))
+        G = Bc @ Bc.t()
+        pr_s.append(float(torch.diagonal(G).sum() ** 2 / (G * G).sum().clamp_min(1e-12)))
+    btr_t = torch.tensor(btr_s); pr_t = torch.tensor(pr_s)
+    btrace0, btrace0_std = float(btr_t.mean()), float(btr_t.std())
+    effrank0, effrank0_std = float(pr_t.mean()), float(pr_t.std())
+
+    g_mu_pre = float((mu_x0.float() - mu_y).norm())             # both (4096,) fp32 CPU
 
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     torch.save(mu_y, out_dir / "mu_y.pt")
+    torch.save(mu_x0.float(), out_dir / "mu_x0.pt")
     anchors = {
         "trace_x": trace_x,
         "mu_y_norm": float(mu_y.norm()),
-        "mu_img_norm": float(X.mean(dim=0).norm()),
+        "mu_img_norm": float(mu_x0.norm()),
+        "G_mu_pretrained": g_mu_pre,
+        "G_mu_norm_pretrained": g_mu_pre / (trace_x ** 0.5),
+        "btrace0": btrace0, "btrace0_std": btrace0_std,
+        "effrank0": effrank0, "effrank0_std": effrank0_std,
+        "geo_batch_size": gbs, "n_anchor_batches": int(args.n_anchor_batches),
         "n_captions": int(n_txt),
         "n_images": int(X.shape[0]),
         "pool": "all576",
         "model_id": args.model_id,
         "manifest": str(args.manifest),
+        "seed": int(args.seed),
     }
     save_json(anchors, out_dir / "anchors.json")
 
-    print(f"\n[anchors] mu_y -> {out_dir/'mu_y.pt'}  ||mu_y||={anchors['mu_y_norm']:.3f}")
-    print(f"[anchors] trace_x={trace_x:.3f}  ||mu_image||={anchors['mu_img_norm']:.3f} "
-          f"(n_img={anchors['n_images']}, n_cap={anchors['n_captions']})")
+    print(f"\n[anchors] mu_y  -> {out_dir/'mu_y.pt'}   ||mu_y||={anchors['mu_y_norm']:.3f}")
+    print(f"[anchors] mu_x0 -> {out_dir/'mu_x0.pt'}  ||mu_x0||={anchors['mu_img_norm']:.3f}")
+    print(f"[anchors] trace_x={trace_x:.3f}  (n_img={anchors['n_images']}, n_cap={anchors['n_captions']})")
+    print(f"[anchors] PRETRAINED location gap: G_mu={anchors['G_mu_pretrained']:.3f} "
+          f"normalised={anchors['G_mu_norm_pretrained']:.3f}")
+    print(f"[anchors] pin setpoints over {args.n_anchor_batches} random batches of {gbs}: "
+          f"btrace0={btrace0:.4f} (+-{btrace0_std:.4f})  effrank0={effrank0:.4f} (+-{effrank0_std:.4f})")
+    if anchors["mu_y_norm"] < 0.05 * anchors["mu_img_norm"]:
+        print("[anchors] NOTE: ||mu_y|| << ||mu_x0|| -> the text centroid sits ~at the ORIGIN, "
+              "so 'closing location' is effectively an ORIGIN-PULL of the image cloud "
+              "(same regime as the diagnostic LLaMA anchor). Record this when interpreting.")
     print(f"[anchors] json -> {out_dir/'anchors.json'}")
 
 

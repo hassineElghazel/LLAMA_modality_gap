@@ -3,16 +3,30 @@
 # ONE recipe, three arms (set with --arm on scripts/26_finetune_llava_3arm.py);
 # the arms differ ONLY in the geometry lambdas on the pooled-576 connector output:
 #
-#   arm=vanilla   lambda_d=0   lambda_s=0   lambda_r=0   (= C3 analog; geometry free to drift)
-#   arm=pinned    lambda_d=0   lambda_s=1   lambda_r=1   (= C3pinr analog; scale+rank held, no location move)
-#   arm=location  lambda_d=0.1 lambda_s=1   lambda_r=1   (= Cloc analog; location driven, scale+rank held)
+#   arm=vanilla   l_d=0    l_p=0   l_s=0  l_r=0   (= C3 analog; all geometry free to drift)
+#   arm=pinned    l_d=0    l_p=10  l_s=1  l_r=1   (= C3pinr analog; ALL FOUR axes held)
+#   arm=location  l_d=0.1  l_p=0   l_s=1  l_r=1   (= Cloc analog; location driven, scale+rank held)
 #
-# Loss (ported verbatim from src/training/stage2_distance_sft.py, convex so
-# lambda_d is comparable and lambda_d=0 reduces to pure AR):
-#   L = (1 - lambda_d)*L_AR + lambda_d*L_dist + lambda_s*L_scale + lambda_r*L_rank
-#   L_dist  = || mean_b(z_img) - mu_y ||^2 / trace_x        (z_img = mean_576(connector(vis)))
-#   L_scale = (btrace / btrace0 - 1)^2                       (btrace0 auto-captured at step 1)
-#   L_rank  = (PR / effrank0 - 1)^2                          (effrank0 auto-captured at step 1)
+# Loss (ported from src/training/stage2_distance_sft.py + the location pin from
+# stage2_orientation_pinned_sft.py; convex in the AR/drive split so lambda_d is
+# comparable and lambda_d=0 reduces to pure AR plus guards):
+#   L = (1 - lambda_d)*L_AR + lambda_d*L_dist
+#       + lambda_p*L_pin + lambda_s*L_scale + lambda_r*L_rank
+#   L_dist  = || mean_b(z_img) - mu_y  ||^2 / trace_x   location DRIVE -> text centroid
+#   L_pin   = || mean_b(z_img) - mu_x0 ||^2 / trace_x   location PIN   -> pretrained centroid
+#   L_scale = (btrace / btrace0  - 1)^2                  scale pin
+#   L_rank  = (PR     / effrank0 - 1)^2                  rank pin
+# All anchors are FROZEN, precomputed by scripts/25 -- nothing is captured live.
+#
+# THE LOCATION PIN IS LOAD-BEARING, not decoration. L_scale and L_rank are computed
+# on batch-CENTRED data, so both are translation-invariant and cannot constrain where
+# the cloud sits. Without lambda_p the "pinned" arm leaves location completely
+# unconstrained and plain AR drags it -- measured on the first run: normalised G_mu
+# fell 3.48 -> 2.62 in an arm that was supposed to be holding geometry still, making
+# the causal baseline an uncontrolled variable. The diagnostic C3pinr this arm mirrors
+# pins location explicitly (--lambda-p 10), which is why every pinned C condition sits
+# at G_mu ~177.7 while unpinned C3 drifts to 245. The pin is an additive GUARD and does
+# not tax the AR budget: w_ar = 1 - lambda_d.
 #
 # AR side / LoRA / optimizer / schedule mirror configs/training_c5.yaml so the
 # LLaVA arms replicate the diagnostic Cloc recipe. NOTE (verified against
@@ -42,9 +56,16 @@ distance:
   batch_size: 32                   # image batch for the geometry leg (vision under no_grad -> fits 11GB alongside the 4-bit 7B)
   pool: all576                     # mean over the 576 projected image tokens
   # Frozen targets precomputed by scripts/25_precompute_llava_anchors.py on DOCCI-train:
-  mu_y_source: outputs/anchors_docci/mu_y.pt              # (4096,) Vicuna embed content-mean
-  trace_x_source: outputs/anchors_docci/anchors.json     # reads {"trace_x": ...}
+  mu_y_source: outputs/anchors_docci/mu_y.pt             # (4096,) Vicuna embed content-mean
+  mu_x0_source: outputs/anchors_docci/mu_x0.pt           # (4096,) pretrained image centroid (pin target)
+  trace_x_source: outputs/anchors_docci/anchors.json     # reads trace_x + btrace0 + effrank0
   trace_x: null                    # fallback scalar if trace_x_source is absent
+  # btrace0/effrank0 come from anchors.json, estimated as the MEAN over many random
+  # batches of `batch_size` -- i.e. under the same sampling law the pin sees. A single
+  # step-1 capture is a biased, noisy setpoint to hold for all 603 steps (batch-centred
+  # sum-of-squares carries a (1-1/B) factor; a B-sample participation ratio is capped at
+  # B, and LLaVA's pooled cloud is only eff_rank ~3.4). Kept as a fallback for old
+  # anchor files, with a warning at startup.
 
 lora:
   enabled: true

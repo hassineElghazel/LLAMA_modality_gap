@@ -10,16 +10,23 @@
 #SBATCH --error=outputs/logs/llava_arm_%j.err
 
 # ONE arm END-TO-END in a single job (QOS=1 serial): anchors-if-missing -> train
-# -> caption+score on DOCCI-test. The FIRST arm to run computes the shared frozen
-# anchors (mu_y + trace_x); the other arms reuse them. 3 jobs total:
+# -> gap -> caption+score on DOCCI-test. The FIRST arm to run computes the shared
+# frozen anchors (mu_y + mu_x0 + trace_x + pin setpoints); the others reuse them.
 #     sbatch --export=ALL,ARM=pinned   scripts/submit_llava_arm.sbatch
 #     sbatch --export=ALL,ARM=location scripts/submit_llava_arm.sbatch
 #     sbatch --export=ALL,ARM=vanilla  scripts/submit_llava_arm.sbatch
 #
-# Eval = DOCCI-test (n=5000): reference-free CLIPScore (15) + SigLIP (15b), and
-# reference-based BLEU/CIDEr/METEOR (28, --no-spice). Arm0 (pretrained) is run
-# separately via submit_llava_eval.sbatch (no training).
+# Arms (scripts/26 ARM_LAMBDAS):
+#   vanilla   l_d=0.0  l_p=0.0   l_s=0.0  l_r=0.0   geometry free           (C3 analog)
+#   pinned    l_d=0.0  l_p=10.0  l_s=1.0  l_r=1.0   all four axes held      (C3pinr analog)
+#   location  l_d=0.1  l_p=0.0   l_s=1.0  l_r=1.0   location driven to mu_y (Cloc analog)
+# The causal contrast is location - pinned: identical recipes except the location term.
+#
+# Eval = DOCCI-test (n=5000): gap suite (23), reference-free CLIPScore (15) + SigLIP
+# (15b), reference-based BLEU/CIDEr/METEOR (28, --no-spice). Arm0 (pretrained) runs
+# separately via submit_llava_eval.sbatch.
 set -Eeuo pipefail
+START_TS=$(date +%s)
 echo "[slurm] job=${SLURM_JOB_ID} node=$(hostname) started $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 : "${ARM:?set ARM=vanilla|pinned|location via --export}"
@@ -36,10 +43,25 @@ tg_notify() {
         --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
         --data-urlencode "text=$1" --data-urlencode "parse_mode=Markdown" >/dev/null || true
 }
-trap 'tg_notify "❌ *LLaVA arm ${ARM} FAILED* (job \`${SLURM_JOB_ID}\`, line \`${LINENO}\`)"' ERR
+elapsed() { local s=$(( $(date +%s) - START_TS )); printf '%dh%02dm' $((s/3600)) $(((s%3600)/60)); }
+
+# Report WHICH stage and WHICH command died. A bare line number sent us chasing the
+# wrong bug once (the failure was a metadata call after a successful train, but the
+# alert pointed at the training line).
+STAGE="startup"
+on_err() {
+    local rc=$1
+    tg_notify "❌ *LLaVA arm ${ARM} FAILED*
+stage: \`${STAGE}\`
+cmd: \`${FAILED_CMD}\`
+exit \`${rc}\` after $(elapsed)
+job \`${SLURM_JOB_ID}\` on \`$(hostname)\`
+log: \`outputs/logs/llava_arm_${SLURM_JOB_ID}.err\`"
+}
+trap 'rc=$?; FAILED_CMD="${BASH_COMMAND}"; on_err "${rc}"' ERR
 
 cd ~/LLAMA_modality_gap
-mkdir -p outputs/logs outputs/checkpoints outputs/anchors_docci outputs/predictions outputs/metrics
+mkdir -p outputs/logs outputs/checkpoints outputs/anchors_docci outputs/predictions outputs/metrics outputs/embeddings_docci
 
 nvidia-smi --query-gpu=index,name,memory.free --format=csv || echo "[slurm] nvidia-smi failed"
 test -f data/docci/train_manifest.json || { echo "[arm] FATAL: run submit_docci_prep.sbatch first" >&2; exit 1; }
@@ -47,46 +69,82 @@ test -f data/docci/test_manifest.json  || { echo "[arm] FATAL: run submit_docci_
 
 MODEL_ID="${MODEL_ID:-llava-hf/llava-1.5-7b-hf}"
 DOCCI=configs/docci_eval.yaml
+TAG="${ARM}_docci"
+CKPT="outputs/checkpoints/llava_docci_${ARM}"
 CLIP_MODEL="${CLIP_MODEL:-$HOME/clip_b32}"
 SIGLIP_MODEL="${SIGLIP_MODEL:-google/siglip-base-patch16-224}"
+# what this arm is contrasted against in the closing summary
+CONTROL="${CONTROL:-pinned_docci}"
+[ "${ARM}" = "pinned" ] && CONTROL="arm0_docci"
+
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 || echo "?")
+tg_notify "🚀 *LLaVA arm ${ARM}* started
+job \`${SLURM_JOB_ID}\` on \`$(hostname)\` (${GPU_NAME})
+plan: anchors -> train -> gap -> caption -> score
+eval: DOCCI-test n=5000, contrast vs \`${CONTROL}\`"
 
 # ---------------- 1. anchors (shared across arms; compute once) ----------------
-if [ ! -f outputs/anchors_docci/mu_y.pt ]; then
-    echo "[arm] anchors missing -> computing (this arm is first; others will reuse)"
+# mu_x0.pt is REQUIRED by the location pin, so anchor sets predating it are stale
+# and must be rebuilt -- otherwise the pinned arm fails at startup.
+STAGE="anchors"
+if [ ! -f outputs/anchors_docci/mu_y.pt ] || [ ! -f outputs/anchors_docci/mu_x0.pt ]; then
+    echo "[arm] anchors missing/stale (need mu_y.pt AND mu_x0.pt) -> computing"
     HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1} TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1} \
     python scripts/25_precompute_llava_anchors.py \
         --manifest data/docci/train_manifest.json \
         --model-id "${MODEL_ID}" \
+        --geo-batch-size 32 \
         --out-dir outputs/anchors_docci
-    echo "[arm] anchors -> $(cat outputs/anchors_docci/anchors.json)"
+    tg_notify "📐 *anchors computed* (frozen, shared by all arms)
+\`\`\`
+$(cat outputs/anchors_docci/anchors.json)
+\`\`\`"
 else
     echo "[arm] anchors present -> reuse: $(cat outputs/anchors_docci/anchors.json)"
 fi
 
-tg_notify "🚀 *LLaVA arm ${ARM}* started (job \`${SLURM_JOB_ID}\` on \`$(hostname)\`)"
-
 # ---------------- 2. train this arm ----------------
+STAGE="train"
 HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1} TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1} \
 python scripts/26_finetune_llava_3arm.py \
     --config configs/training_llava_docci.yaml --arm "${ARM}"
 
-CKPT="outputs/checkpoints/llava_docci_${ARM}"
-test -f "${CKPT}/connector.pt" || { echo "[arm] FATAL: ${CKPT}/connector.pt not written by training" >&2; exit 1; }
-tg_notify "✅ *LLaVA arm ${ARM} trained* -> \`${CKPT}\`
-$(cat ${CKPT}/train_sidecar.json 2>/dev/null | head -c 400)"
+test -f "${CKPT}/connector.pt" || { echo "[arm] FATAL: ${CKPT}/connector.pt not written" >&2; exit 1; }
+tg_notify "✅ *${ARM} trained* in $(elapsed) -> \`${CKPT}\`
+$(python scripts/30_run_summary.py --arm "${ARM}" --tag "${TAG}" 2>/dev/null || echo 'summary unavailable')"
 
-# ---------------- 3. caption DOCCI-test with this arm ----------------
-python scripts/27_caption_llava.py --eval-config "${DOCCI}" --tag "${ARM}_docci" \
+# ---------------- 3. gap suite on DOCCI-test (the geometry readout) ----------------
+# Depends only on connector.pt: the LoRA sits on the LLM's q/v/o_proj, which neither
+# the image cloud (stops at the connector output) nor the text cloud (embed_tokens)
+# traverses. So this measures the intervention itself, on the EVAL set rather than
+# on a 32-image training batch.
+STAGE="gap"
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/23_extract_llava15_geometry.py \
+    --manifest data/docci/test_manifest.json \
+    --condition "${TAG}" \
+    --connector-path "${CKPT}/connector.pt" \
+    --embeddings-dir outputs/embeddings_docci \
+    || echo "[arm] ${TAG} gap FAILED (non-fatal)"
+
+# ---------------- 4. caption DOCCI-test with this arm ----------------
+STAGE="caption"
+python scripts/27_caption_llava.py --eval-config "${DOCCI}" --tag "${TAG}" \
     --batch-size 8 --adapter-dir "${CKPT}" --connector-path "${CKPT}/connector.pt"
 
-# ---------------- 4. score (all non-fatal so one metric can't sink the row) ----------------
+# ---------------- 5. score (all non-fatal so one metric can't sink the row) ----------------
+STAGE="score"
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/15_clipscore.py \
-    --config "${DOCCI}" --condition "${ARM}_docci" --clip-model "${CLIP_MODEL}" \
-    || echo "[arm] ${ARM}_docci CLIPScore FAILED (non-fatal)"
-python scripts/15b_siglip_score.py --config "${DOCCI}" --condition "${ARM}_docci" \
-    --siglip-model "${SIGLIP_MODEL}" || echo "[arm] ${ARM}_docci SigLIP FAILED (non-fatal)"
-python scripts/28_score_docci_refs.py --config "${DOCCI}" --tag "${ARM}_docci" --no-spice \
-    || echo "[arm] ${ARM}_docci DOCCI-ref scoring FAILED (non-fatal; needs Java)"
+    --config "${DOCCI}" --condition "${TAG}" --clip-model "${CLIP_MODEL}" \
+    || echo "[arm] ${TAG} CLIPScore FAILED (non-fatal)"
+python scripts/15b_siglip_score.py --config "${DOCCI}" --condition "${TAG}" \
+    --siglip-model "${SIGLIP_MODEL}" || echo "[arm] ${TAG} SigLIP FAILED (non-fatal)"
+python scripts/28_score_docci_refs.py --config "${DOCCI}" --tag "${TAG}" --no-spice \
+    || echo "[arm] ${TAG} DOCCI-ref scoring FAILED (non-fatal; needs Java)"
 
-tg_notify "🏁 *LLaVA arm ${ARM} DONE* (train+eval, job \`${SLURM_JOB_ID}\`)"
+STAGE="summary"
+SUMMARY=$(python scripts/30_run_summary.py --arm "${ARM}" --tag "${TAG}" --compare "${CONTROL}" 2>/dev/null \
+          || echo "summary unavailable")
+echo "${SUMMARY}"
+tg_notify "🏁 *LLaVA arm ${ARM} DONE* (train+gap+eval, total $(elapsed))
+${SUMMARY}"
 echo "[slurm] llava-arm ${ARM} complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
