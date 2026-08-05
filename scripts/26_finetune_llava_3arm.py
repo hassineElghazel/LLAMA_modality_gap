@@ -99,6 +99,10 @@ def main() -> None:
     ap.add_argument("--out-dir", default=None, help="Override checkpoint dir.")
     ap.add_argument("--lambda-p", type=float, default=None,
                     help="Override the arm's location-pin weight (default: arm table).")
+    ap.add_argument("--lr", type=float, default=None,
+                    help="Override optimizer.lr from the config. The config's 2e-4 came from "
+                         "the diagnostic recipe, which fine-tuned an UNDERTRAINED connector; "
+                         "on a fully-converged LLaVA it may be what breaks termination.")
     ap.add_argument("--target-gap", type=float, default=0.0,
                     help="Normalised location gap the drive aims for, ||zbar-mu_y||/sqrt(trace_x). "
                          "0.0 (default) = drive to zero = the original loss, exactly. Set e.g. 0.45 "
@@ -234,13 +238,15 @@ def main() -> None:
     if args.max_steps:
         total_steps = min(total_steps, args.max_steps)
     warmup = max(1, int(cfg["schedule"]["warmup_ratio"] * total_steps))
+    lr = float(cfg["optimizer"]["lr"]) if args.lr is None else float(args.lr)
     opt = torch.optim.AdamW(
-        trainable, lr=float(cfg["optimizer"]["lr"]),
+        trainable, lr=lr,
         weight_decay=float(cfg["optimizer"]["weight_decay"]),
         betas=tuple(cfg["optimizer"]["betas"]), eps=float(cfg["optimizer"]["eps"]))
     sched = get_cosine_schedule_with_warmup(opt, warmup, total_steps)
     scaler = torch.cuda.amp.GradScaler()
-    print(f"[3arm] total_steps={total_steps} (warmup={warmup}, accum={accum})")
+    print(f"[3arm] total_steps={total_steps} (warmup={warmup}, accum={accum}) lr={lr:g}"
+          + ("" if args.lr is None else f"  [OVERRIDE, config has {cfg['optimizer']['lr']}]"))
 
     geo_bs = int(dcfg["batch_size"])
     use_scale = lambda_s > 0.0
@@ -371,7 +377,7 @@ def main() -> None:
         "arm": args.arm,
         "lambda_d": lambda_d, "lambda_p": lambda_p,
         "lambda_s": lambda_s, "lambda_r": lambda_r,
-        "target_gap": target_gap,
+        "target_gap": target_gap, "lr": lr,
         "total_steps": total_steps, "accum": accum, "geo_batch_size": geo_bs,
         "btrace0": btrace0, "effrank0": effrank0, "trace_x": trace_x,
         "anchors_pins_frozen": bool(anchors_have_pins),

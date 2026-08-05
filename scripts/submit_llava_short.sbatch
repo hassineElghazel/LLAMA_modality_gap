@@ -9,12 +9,26 @@
 #SBATCH --output=outputs/logs/llava_short_%j.out
 #SBATCH --error=outputs/logs/llava_short_%j.err
 
-# SHORT-SCHEDULE study: does the location lever REAPPEAR when the connector and
-# decoder are less co-adapted?
+# ONE arm with a configurable schedule, location dose and learning rate, evaluated
+# on the 1000-image slice. Knobs: ARM, STEPS, TARGET_GAP, LR, TAG, EVAL_CFG.
 #
-#   sbatch --export=ALL,ARM=pinned,TAG=pinned_s150                  scripts/submit_llava_short.sbatch
+#   # short-schedule dose study
+#   sbatch --export=ALL,ARM=pinned,TAG=pinned_s150                   scripts/submit_llava_short.sbatch
 #   sbatch --export=ALL,ARM=location,TAG=locfull_s150,TARGET_GAP=0.0  scripts/submit_llava_short.sbatch
-#   sbatch --export=ALL,ARM=location,TAG=loc045_s150,TARGET_GAP=0.45 scripts/submit_llava_short.sbatch
+#   sbatch --export=ALL,ARM=location,TAG=loc045_s150,TARGET_GAP=0.45  scripts/submit_llava_short.sbatch
+#
+#   # learning-rate probe for the termination collapse (full epoch, gentler lr)
+#   sbatch --export=ALL,ARM=vanilla,TAG=vanilla_lr2e5,STEPS=603,LR=2e-5 scripts/submit_llava_short.sbatch
+#
+# THE TERMINATION COLLAPSE. Fine-tuning destroys the model's ability to stop:
+# arm0 loops on 0.7% of captions, 150 steps on 84.1%, 603 steps on 76.3%. It
+# breaks almost immediately and then relearns slowly, so it is an UNDER-training
+# artifact rather than over-training damage -- but the recovery rate (4x the
+# steps for -7.8pp) is far too slow for more epochs alone to fix it. lr=2e-4 came
+# from the diagnostic recipe, which fine-tuned an UNDERTRAINED connector; on a
+# fully-converged LLaVA it is the leading untested suspect. Ruled out already:
+# EOS masking (pad 32001 is distinct from eos 2) and training-caption truncation
+# (only 4.8% of DOCCI-train exceeds 256 tokens).
 #
 # WHY THIS EXPERIMENT. At a full epoch (603 steps) closing the location gap 72x
 # (3.755 -> 0.052) changed grounding by z=-0.0 on quality-matched captions. Two
@@ -43,7 +57,12 @@ echo "[slurm] job=${SLURM_JOB_ID} node=$(hostname) started $(date -u +%Y-%m-%dT%
 : "${ARM:?set ARM=vanilla|pinned|location via --export}"
 STEPS="${STEPS:-150}"
 TARGET_GAP="${TARGET_GAP:-0.0}"
+LR="${LR:-}"                       # empty -> use configs/training_llava_docci.yaml (2e-4)
 TAG="${TAG:-${ARM}_s${STEPS}}"
+LR_FLAGS=()
+[ -n "${LR}" ] && LR_FLAGS=(--lr "${LR}")
+# expand as ${LR_FLAGS[@]+"${LR_FLAGS[@]}"}: plain "${LR_FLAGS[@]}" on an empty
+# array is an unbound-variable error under `set -u` in bash < 4.4.
 
 source ~/miniforge3/etc/profile.d/conda.sh
 conda activate llama_gap
@@ -83,9 +102,9 @@ CLIP_MODEL="${CLIP_MODEL:-$HOME/clip_b32}"
 SIGLIP_MODEL="${SIGLIP_MODEL:-google/siglip-base-patch16-224}"
 CONTROL="${CONTROL:-pinned_s150_docci}"
 
-tg_notify "⏱ *short run ${TAG}* started
+tg_notify "⏱ *run ${TAG}* started
 job \`${SLURM_JOB_ID}\` on \`$(hostname)\`
-arm=\`${ARM}\` steps=\`${STEPS}\` target_gap=\`${TARGET_GAP}\`
+arm=\`${ARM}\` steps=\`${STEPS}\` target_gap=\`${TARGET_GAP}\` lr=\`${LR:-config 2e-4}\`
 eval: \`${EVAL_CFG}\`, contrast vs \`${CONTROL}\`"
 
 # ---------------- 1. train (short schedule; cosine rescales to STEPS) ----------------
@@ -96,6 +115,7 @@ python scripts/26_finetune_llava_3arm.py \
     --arm "${ARM}" \
     --max-steps "${STEPS}" \
     --target-gap "${TARGET_GAP}" \
+    ${LR_FLAGS[@]+"${LR_FLAGS[@]}"} \
     --out-dir "${CKPT}"
 
 test -f "${CKPT}/connector.pt" || { echo "[short] FATAL: ${CKPT}/connector.pt not written" >&2; exit 1; }
