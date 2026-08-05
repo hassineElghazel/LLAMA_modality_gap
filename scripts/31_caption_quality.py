@@ -65,8 +65,7 @@ def caption_stats(text: str, n: int = 4) -> dict:
     }
 
 
-def summarise(texts: list[str]) -> dict:
-    rows = [caption_stats(t) for t in texts]
+def _agg(rows: list[dict]) -> dict:
     n = max(len(rows), 1)
     return {
         "n": len(rows),
@@ -76,6 +75,22 @@ def summarise(texts: list[str]) -> dict:
         "truncated_rate": sum(r["truncated"] for r in rows) / n,
         "mean_max_reps": sum(r["max_4gram_reps"] for r in rows) / n,
     }
+
+
+def summarise(texts: list[str]) -> dict:
+    """Overall stats, plus the STOPPED/RAN-ON split.
+
+    The split is the diagnostic that matters: a model that produces clean text
+    whenever it terminates has a STOPPING problem (it runs past its content and
+    then loops); a model that loops even in captions it chose to end has a
+    COHERENCE problem. Those call for different fixes, and the aggregate number
+    cannot tell them apart.
+    """
+    rows = [caption_stats(t) for t in texts]
+    out = _agg(rows)
+    out["stopped"] = _agg([r for r in rows if not r["truncated"]])
+    out["ran_on"] = _agg([r for r in rows if r["truncated"]])
+    return out
 
 
 def load_captions(path: Path) -> list[str]:
@@ -133,6 +148,24 @@ def main() -> None:
     print("\nRead: distinct_4 near the GOLD row = human-like variety; well below it = looping.")
     print("      loop% = captions with a 4-gram occurring 3+ times.")
     print("      trunc% = captions that hit the token cap instead of ending a sentence.")
+
+    # --- the diagnostic split: captions that STOPPED vs captions that RAN ON ---
+    print("\n" + "=" * len(hdr))
+    print("SPLIT: captions the model CHOSE to end, vs captions that hit the cap")
+    print("=" * len(hdr))
+    sub = f"{'condition':22} {'group':>9} {'n':>6} {'words':>7} {'distinct4':>10} {'loop%':>7}"
+    print(sub)
+    print("-" * len(sub))
+    for tag, s in results.items():
+        for grp in ("stopped", "ran_on"):
+            g = s.get(grp) or {}
+            if not g.get("n"):
+                continue
+            print(f"{tag:22} {grp:>9} {g['n']:6d} {g['mean_words']:7.1f} "
+                  f"{g['distinct_4']:10.3f} {100*g['looping_rate']:6.1f}%")
+    print("\nRead the STOPPED rows. Clean there (distinct_4 near GOLD) => the model writes")
+    print("well and simply fails to stop in time: a STOPPING problem, fixable by decoding")
+    print("or more training. Still looping there => COHERENCE is damaged, a deeper fault.")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
