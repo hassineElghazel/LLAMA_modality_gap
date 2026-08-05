@@ -99,12 +99,17 @@ def main() -> None:
     ap.add_argument("--out-dir", default=None, help="Override checkpoint dir.")
     ap.add_argument("--lambda-p", type=float, default=None,
                     help="Override the arm's location-pin weight (default: arm table).")
+    ap.add_argument("--target-gap", type=float, default=0.0,
+                    help="Normalised location gap the drive aims for, ||zbar-mu_y||/sqrt(trace_x). "
+                         "0.0 (default) = drive to zero = the original loss, exactly. Set e.g. 0.45 "
+                         "to land where the diagnostic Cloc landed instead of overshooting past it.")
     args = ap.parse_args()
 
     cfg = load_yaml(args.config)
     lam = ARM_LAMBDAS[args.arm]
     lambda_d, lambda_s, lambda_r = lam["lambda_d"], lam["lambda_s"], lam["lambda_r"]
     lambda_p = lam["lambda_p"] if args.lambda_p is None else float(args.lambda_p)
+    target_gap = float(args.target_gap)
     seed = int(cfg.get("seed", 42))
     random.seed(seed); torch.manual_seed(seed)
 
@@ -112,6 +117,10 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"[3arm] arm={args.arm}  lambda_d={lambda_d} lambda_p={lambda_p} "
           f"lambda_s={lambda_s} lambda_r={lambda_r}")
+    if lambda_d > 0.0:
+        print(f"[3arm] location target gap = {target_gap}"
+              + ("  (drive to zero = original loss)" if target_gap == 0.0 else
+                 f"  (hold the gap AT {target_gap}, not below it)"))
     print(f"[3arm] out_dir={out_dir}")
 
     # ---- data ----
@@ -274,7 +283,16 @@ def main() -> None:
         zbar = zf.mean(dim=0)
         # location DRIVE (-> mu_y) and location PIN (-> mu_x0). Same form, different target;
         # both are pure translations of the image cloud (identical gradient on every token).
-        l_dist = ((zbar - mu_y) ** 2).sum() / trace_x
+        #
+        # The drive aims at a normalised gap of `target_gap` rather than at zero. With
+        # target_gap=0 this reduces ALGEBRAICALLY to the original ||zbar-mu_y||^2/trace_x
+        # (since (nG-0)^2 == nG^2 == that quantity), so the default is unchanged.
+        # A non-zero target matters because the diagnostic Cloc landed at ~0.45 while the
+        # same lambda_d drove LLaVA to 0.052 -- 9x further, past the knee of the C
+        # dose-response, into a regime C never tested. Matching the ENDPOINT is the way to
+        # match the dose; matching the lambda number is not (cf. the C4bp lambda=0.1 lesson).
+        n_g = ((zbar - mu_y) ** 2).sum().clamp_min(1e-12).sqrt() / (trace_x ** 0.5)
+        l_dist = (n_g - target_gap) ** 2
         l_pin = (((zbar - mu_x0) ** 2).sum() / trace_x) if mu_x0 is not None else zf.new_zeros(())
         # scale (translation-invariant: computed on centred data)
         btrace = ((zf - zbar) ** 2).sum(dim=1).mean()
@@ -288,7 +306,7 @@ def main() -> None:
         if use_rank and effrank0 is None:
             effrank0 = float(pr.detach())
         l_rank = ((pr / effrank0 - 1.0) ** 2) if use_rank else zf.new_zeros(())
-        return l_dist, l_pin, l_scale, l_rank, btrace, pr
+        return l_dist, l_pin, l_scale, l_rank, btrace, pr, n_g
 
     # ---- train loop ----
     model.train()
@@ -310,16 +328,17 @@ def main() -> None:
             ar_val += float(loss.detach()) / accum
 
         gd = gp = gs = gr = 0.0
-        gbt = gpr = float("nan")
+        gbt = gpr = gng = float("nan")
         if run_geo:
             with torch.cuda.amp.autocast(dtype=torch.float16):
-                l_dist, l_pin, l_scale, l_rank, btrace, pr = geo_losses()
+                l_dist, l_pin, l_scale, l_rank, btrace, pr, n_g = geo_losses()
                 geo = (lambda_d * l_dist + lambda_p * l_pin
                        + lambda_s * l_scale + lambda_r * l_rank)
             scaler.scale(geo).backward()
             gd, gp = float(l_dist.detach()), float(l_pin.detach())
             gs, gr = float(l_scale.detach()), float(l_rank.detach())
             gbt, gpr = float(btrace.detach()), float(pr.detach())
+            gng = float(n_g.detach())          # measured gap, independent of the target
 
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
@@ -329,10 +348,12 @@ def main() -> None:
 
         if step % log_every == 0 or step == total_steps - 1:
             # nG   = ||zbar - mu_y ||/sqrt(trace_x) -- the normalised LOCATION GAP, directly
-            #        comparable to the diagnostic table (open ~2.7, closed ~0.45).
+            #        comparable to the diagnostic table (open ~2.7, closed ~0.45). Measured,
+            #        NOT derived from l_dist: with a non-zero target l_dist is (nG-target)^2,
+            #        so sqrt(l_dist) would report the distance TO THE TARGET instead.
             # drift= ||zbar - mu_x0||/sqrt(trace_x) -- how far location has moved from the
             #        pretrained centroid. The pinned arm must hold this near 0.
-            n_g = gd ** 0.5
+            n_g = gng
             drift = gp ** 0.5
             geo_msg = (f"| nG={n_g:.3f} drift={drift:.3f} "
                        f"| dist={gd:.4f} pin={gp:.4f} scale={gs:.5f} rank={gr:.5f} "
@@ -350,6 +371,7 @@ def main() -> None:
         "arm": args.arm,
         "lambda_d": lambda_d, "lambda_p": lambda_p,
         "lambda_s": lambda_s, "lambda_r": lambda_r,
+        "target_gap": target_gap,
         "total_steps": total_steps, "accum": accum, "geo_batch_size": geo_bs,
         "btrace0": btrace0, "effrank0": effrank0, "trace_x": trace_x,
         "anchors_pins_frozen": bool(anchors_have_pins),
@@ -360,7 +382,7 @@ def main() -> None:
         # final-step geometry, normalised so it reads on the diagnostic scale
         # (open ~2.7, closed ~0.45). first_* is step 0 of THIS run.
         "final_AR": ar_val,
-        "final_G_mu_norm": (gd ** 0.5) if run_geo else None,
+        "final_G_mu_norm": gng if run_geo else None,
         "final_pin_drift_norm": (gp ** 0.5) if run_geo else None,
         "final_btrace": gbt if run_geo else None,
         "final_PR": gpr if run_geo else None,

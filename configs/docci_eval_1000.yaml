@@ -1,0 +1,54 @@
+# DOCCI-test evaluation config, 1000-image slice, for the SHORT-SCHEDULE study.
+#
+# Identical to docci_eval.yaml except num_images: 1000. The slice is the FIRST
+# 1000 rows of the manifest (27_caption_llava.py head-selects), NOT a random
+# draw -- deterministic and shared by every arm, matching the convention used
+# for the diagnostic 1300-image set.
+#
+# Power: CLIPScore SE ~0.093/sqrt(1000) = 0.0029, so a two-arm contrast has
+# diff-SE ~0.0042 and a 2-sigma floor of ~0.008. The diagnostic-C location
+# effect was +0.049, ~12x that, so this slice resolves a C-sized effect
+# comfortably while cutting captioning time from ~3.5h to ~45min per arm.
+#
+# ---------------------------------------------------------------------------
+#
+# DOCCI standard TEST split (5,000). Images are materialized by
+# scripts/24_prep_docci.py as zero-padded {image_id:012d}.jpg under image_root,
+# so scripts/15_clipscore.py and scripts/15b_siglip_score.py resolve them with
+# the SAME `image_root / f"{id:012d}.jpg"` convention as COCO -- no scorer change.
+#
+# Detail prompt + greedy 256-token decoding IDENTICAL to configs/description_eval.yaml
+# (dd256), so captions are generated under the same regime on both eval sets.
+#
+# Metrics on DOCCI-test: CLIPScore (15) + SigLIP (15b) reference-free; METEOR+SPICE
+# vs the single gold caption (28_score_docci_refs.py). NO CHAIR (needs COCO-80
+# annotations, absent for DOCCI's general images).
+
+eval_set:
+  name: docci_test
+  split: test
+  num_images: 1000
+  image_root: data/docci/images_test
+  manifest_path: data/docci/test_manifest.json
+
+prompt:
+  system: ""
+  user: |
+    <image>
+    Describe the following image in detail.
+
+generation:
+  do_sample: false
+  num_beams: 1
+  max_new_tokens: 256
+
+batch:
+  per_device_batch_size: 8
+
+output:
+  predictions_dir: outputs/predictions
+  scores_dir: outputs/metrics
+  qualitative_report_dir: outputs/reports
+  num_qualitative_samples: 20
+
+seed: 42
