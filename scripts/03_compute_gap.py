@@ -44,6 +44,8 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # Cloc = clean-location: distance drive + scale-pin + rank-pin (isolate LOCATION,
               # hold scale AND rank) -> assumption-free location causality.
               "Cloc",
+              # Cloc_long = the same recipe trained to an annealed cosine over 2,250 steps.
+              "Cloc_long",
               # Corient = clean-orientation: InfoNCE drive (lambda_o=0.9) + location-pin +
               # scale-pin + rank-pin (isolate ORIENTATION, hold the other 3 axes).
               "Corient",
@@ -54,7 +56,9 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               # Clocorient = combined: Cloc + Corient dosages in one model -- InfoNCE
               # orientation (lambda_o=0.5) + location CLOSURE to mu_y (lambda_d=0.1) +
               # scale-pin + rank-pin. Moves LOCATION + ORIENTATION jointly, scale/rank held.
-              "Clocorient")
+              "Clocorient",
+              # seed repeats of the attribution pair:
+              "C3pinr_s1", "C3pinr_s2", "Cloc_s1", "Cloc_s2")
 
 
 def _embed_paths(condition: str, embeddings_dir: Path) -> tuple[Path, Path]:

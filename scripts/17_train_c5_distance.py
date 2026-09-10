@@ -143,6 +143,10 @@ def main():
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--subset-size", type=int, default=None)
     p.add_argument("--resume", default=None)
+    p.add_argument("--seed", type=int, default=None,
+                   help="override configs/*.yaml seed; use for repeat runs. "
+                        "Varies LoRA init and data order; the Stage-1 connector "
+                        "init is fixed, so repeats are paired across conditions.")
     p.add_argument("--output-name", default=None,
                    help="checkpoint filename, e.g. stage2_vlm_C5_lam0p5.pt")
     args = p.parse_args()
@@ -152,7 +156,10 @@ def main():
     enc_cfg = load_yaml(args.encoders_config)
     llm_cfg = load_yaml(args.llm_config)
     data_cfg = load_yaml(args.data_config)
+    if args.seed is not None:
+        cfg["seed"] = int(args.seed)
     set_seed(cfg["seed"])
+    print(f"[seed] run seed = {cfg['seed']}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     cfg["device"] = device

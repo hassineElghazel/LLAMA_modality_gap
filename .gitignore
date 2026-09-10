@@ -47,3 +47,29 @@ Thumbs.db
 wandb/
 *.pdf
 *.tex
+# LaTeX build artifacts (the thesis is not part of the cluster job)
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.bcf
+*.blg
+*.run.xml
+*.glo
+*.gls
+*.glg
+*.ist
+*.glo-abr
+*.glg-abr
+
+# Thesis working folder: documents, not code. Back this up SEPARATELY.
+thesis draft/
+
+# Editor / slides / local scratch
+*.code-workspace
+*.pptx

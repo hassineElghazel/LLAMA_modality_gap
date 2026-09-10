@@ -70,7 +70,7 @@ run_thor_20:
 	srun --ntasks 1 --cpus-per-task 4 --mem=64GB --partition=A100 --gpus=1g.20gb:1 -t 24:00:00 --pty bash
 
 run_baldur:
-	srun --ntasks 1 --cpus-per-task 4 --mem=32GB --partition=RTX --gpus=2080ti:1 -t 24:00:00 --pty bash
+	srun --ntasks 1 --cpus-per-task 4 --mem=64GB --partition=RTX --gpus=2080ti:1 -t 24:00:00 --pty bash
 
 start_jup:
 	jupyter notebook --no-browser --port 40005 --NotebookApp.allow_origin='*' --NotebookApp.ip='0.0.0.0'
