@@ -28,6 +28,11 @@
 # Overrides: WALL_H, EVAL_H, SAFETY, CAL_STEPS, SPS (skip phase A), TAG.
 #   SPS=113 sbatch ...        # trust a known rate, skip calibration
 #   SKIP_TRAIN=1 sbatch ...   # re-run evaluation on an existing checkpoint
+#   RESUME=1 SUBSET=48928 sbatch ...   # continue an interrupted run
+#
+# RESUME skips both phases and picks the checkpoint up where it stopped. SUBSET
+# must repeat the original value, since that is what fixed total_steps.
+# Training is retried TRAIN_ATTEMPTS times, RETRY_SLEEP apart, resuming each time.
 # ============================================================================
 
 set -Eeuo pipefail
@@ -36,6 +41,8 @@ WALL_H="${WALL_H:-92}"          # MUST match #SBATCH --time above
 EVAL_H="${EVAL_H:-7}"           # extract + gap + caption 5000 + score + clipscore
 SAFETY="${SAFETY:-0.88}"        # margin for startup, checkpoint writes, slowdown
 CAL_STEPS="${CAL_STEPS:-10}"
+TRAIN_ATTEMPTS="${TRAIN_ATTEMPTS:-3}"   # a crash resumes from the last checkpoint
+RETRY_SLEEP="${RETRY_SLEEP:-1200}"      # 20 min, to let a stalled mount come back
 TAG="${TAG:-Cloc_long}"
 CK="stage2_vlm_${TAG}.pt"
 CKPT="outputs/checkpoints/${CK}"
@@ -55,11 +62,11 @@ tg_notify() {
     [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]] && return 0
     curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
         --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=$1" --data-urlencode "parse_mode=Markdown" >/dev/null || true
+        --data-urlencode "text=$1" >/dev/null || true
 }
 on_error() {
-    tg_notify "❌ *CLOC-LONG FAILED* (job \`${SLURM_JOB_ID}\`) line \`$1\` exit \`$?\`
-Checkpoint if any: \`${CKPT}\` — re-run eval with SKIP_TRAIN=1."
+    tg_notify "CLOC-LONG FAILED (job ${SLURM_JOB_ID}) line $1 exit $?
+Checkpoint if any: ${CKPT} — re-run eval with SKIP_TRAIN=1, or resume with RESUME=1 SUBSET=<n>."
 }
 trap 'on_error ${LINENO}' ERR
 
@@ -75,13 +82,52 @@ median_step_seconds() {   # $1 = log file -> median seconds between step lines
       | sort -n | awk '{a[NR]=$1} END{if(NR>0) print a[int((NR+1)/2)]; else print ""}'
 }
 
-if [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
-  [[ -f "${CKPT}" ]] && { echo "[long] refusing to overwrite ${CKPT}; use SKIP_TRAIN=1 or a new TAG" >&2; exit 3; }
+# train_with_retry -- run training, and on failure resume from the checkpoint.
+#
+# Job 91319 died to a 3.5 h NFS stall; the checkpoint at step 100 was intact and
+# the wall clock had 80 h left, but the script had already exited. Sleeping and
+# resuming costs at most save_every_steps (50) plus the outage.
+train_with_retry() {           # $1 = --subset-size value, $2 = resume? (0/1)
+    local subset="$1" resume_flags=()
+    [[ "${2:-0}" == "1" ]] && resume_flags=(--resume "${CKPT}")
+    local attempt rc
+    for attempt in $(seq 1 "${TRAIN_ATTEMPTS}"); do
+        set +e
+        python scripts/17_train_c5_distance.py "${FLAGS[@]}" \
+            --subset-size "${subset}" --output-name "${CK}" ${resume_flags[@]+"${resume_flags[@]}"}
+        rc=$?
+        set -e
+        [[ ${rc} -eq 0 ]] && return 0
+        if [[ ${attempt} -eq ${TRAIN_ATTEMPTS} ]]; then
+            echo "[long] attempt ${attempt} failed (rc=${rc}); giving up" >&2
+            return ${rc}
+        fi
+        echo "[long] attempt ${attempt} failed (rc=${rc}); sleeping ${RETRY_SLEEP}s, then resuming from ${CKPT}" >&2
+        tg_notify "CLOC-LONG attempt ${attempt} failed (rc=${rc}). Sleeping ${RETRY_SLEEP}s, then resuming from ${CKPT}."
+        sleep "${RETRY_SLEEP}"
+        [[ -f "${CKPT}" ]] && resume_flags=(--resume "${CKPT}")
+    done
+    return 1                   # only reachable if TRAIN_ATTEMPTS < 1
+}
+
+if [[ "${RESUME:-0}" == "1" ]]; then
+  # Resume an interrupted run. SUBSET must be the ORIGINAL --subset-size: it is
+  # what set total_steps, and the restored scheduler state is only meaningful
+  # against the same horizon.
+  [[ -f "${CKPT}" ]] || { echo "[long] RESUME=1 but ${CKPT} not found" >&2; exit 5; }
+  : "${SUBSET:?RESUME=1 requires SUBSET (the original --subset-size, e.g. 48928)}"
+  echo "[long] RESUME: continuing ${CKPT} with subset=${SUBSET}"
+  tg_notify "CLOC-LONG resuming from ${CKPT} (subset ${SUBSET}) on $(hostname)."
+  train_with_retry "${SUBSET}" 1
+  tg_notify "CLOC-LONG: training done. Evaluating."
+
+elif [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
+  [[ -f "${CKPT}" ]] && { echo "[long] refusing to overwrite ${CKPT}; use SKIP_TRAIN=1, RESUME=1, or a new TAG" >&2; exit 3; }
 
   # ---------------- PHASE A: calibrate --------------------------------------
   if [[ -z "${SPS:-}" ]]; then
       CAL_LOG="outputs/logs/cloc_calib_${SLURM_JOB_ID}.log"
-      tg_notify "📏 *CLOC-LONG* calibrating (${CAL_STEPS} steps) on \`$(hostname)\`…"
+      tg_notify "CLOC-LONG calibrating (${CAL_STEPS} steps) on $(hostname)…"
       echo "[long] PHASE A: ${CAL_STEPS} calibration steps"
       python scripts/17_train_c5_distance.py "${FLAGS[@]}" \
           --subset-size $(( CAL_STEPS * 32 )) \
@@ -102,11 +148,10 @@ print(max(200, int(avail/${SPS})))")
   SUBSET=$(( STEPS * 32 ))
   EST_H=$(python3 -c "print(round(${STEPS}*${SPS}/3600,1))")
   echo "[long] PHASE B: ${STEPS} steps (subset=${SUBSET}) ~${EST_H} h at ${SPS} s/step"
-  tg_notify "🚀 *CLOC-LONG* sized: **${STEPS} steps** (subset ${SUBSET}) ≈ ${EST_H} h
-Measured \`${SPS}\` s/step on \`$(hostname)\`. Annealed cosine, wall ${WALL_H} h."
+  tg_notify "CLOC-LONG sized: ${STEPS} steps (subset ${SUBSET}) ~${EST_H} h
+Measured ${SPS} s/step on $(hostname). Annealed cosine, wall ${WALL_H} h."
 
-  python scripts/17_train_c5_distance.py "${FLAGS[@]}" \
-      --subset-size "${SUBSET}" --output-name "${CK}"
+  train_with_retry "${SUBSET}" 0
   tg_notify "CLOC-LONG: training done (${STEPS} steps). Evaluating."
 else
   echo "[long] SKIP_TRAIN=1: evaluating existing ${CKPT}"
@@ -140,5 +185,5 @@ for lab,t in [("Cloc (450 steps)","Cloc"),("${TAG}","${TAG}")]:
 print("\nreference ceiling (dd256): LLaVA-1.5-7B CLIPScore 0.7909")
 PYEOF
 
-tg_notify "✅ *CLOC-LONG done* \`${TAG}\` (job \`${SLURM_JOB_ID}\`)"
+tg_notify "CLOC-LONG done: ${TAG} (job ${SLURM_JOB_ID})"
 echo "[slurm] finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -23,6 +24,32 @@ from src.utils.reproducibility import set_seed
 
 
 IMAGE_PLACEHOLDER = "<image>"
+
+# A hung shared filesystem is the failure this guards against, not a bad JPEG.
+# Job 91319 blocked for 3.5 h on a stalled NFS mount and then died with EACCES on
+# an image that was, and still is, perfectly readable. Retry absorbs a short
+# outage; the ceiling means a long one stops the run loudly near a checkpoint
+# instead of quietly training on a shrinking dataset.
+IMAGE_RETRIES = 5
+IMAGE_RETRY_PAUSE = 8.0          # seconds, multiplied by the attempt number
+MAX_IMAGE_SKIPS = 200            # of ~49k items; past this the filesystem is broken
+_image_skips: list[str] = []
+
+
+def _open_image(path):
+    """Open an image, retrying filesystem errors before giving up.
+
+    ``OSError`` covers the ones that matter here: ``PermissionError`` and
+    ``FileNotFoundError`` from a mount that has gone away, and PIL's
+    ``UnidentifiedImageError`` from a half-written file.
+    """
+    for attempt in range(1, IMAGE_RETRIES + 1):
+        try:
+            return load_image(path)
+        except OSError:
+            if attempt == IMAGE_RETRIES:
+                raise
+            time.sleep(IMAGE_RETRY_PAUSE * attempt)
 
 
 def _format_conversation(convs: list[dict], image_token: str = IMAGE_PLACEHOLDER) -> tuple[str, str]:
@@ -52,8 +79,16 @@ def _llava_collate(items, tokenizer, image_token_id: int, max_length: int = 512)
     labels_list = []
     for it in items:
         try:
-            img = load_image(it.image_path)
-        except FileNotFoundError:
+            img = _open_image(it.image_path)
+        except OSError as exc:
+            _image_skips.append(str(it.image_path))
+            print(f"[data] skipped {it.image_path} ({type(exc).__name__}); "
+                  f"{len(_image_skips)} skipped so far", flush=True)
+            if len(_image_skips) > MAX_IMAGE_SKIPS:
+                raise RuntimeError(
+                    f"{len(_image_skips)} images unreadable after {IMAGE_RETRIES} "
+                    f"attempts each; the filesystem is broken, not the data"
+                ) from exc
             continue
         prompt, response = _format_conversation(it.conversations)
         # Tokenize prompt and response separately so we can mask prompt tokens
