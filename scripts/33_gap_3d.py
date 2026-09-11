@@ -88,6 +88,15 @@ def main():
             B = torch.stack([uc, Vc[:, 0], Vc[:, 1]], dim=1)
             tot = float((R ** 2).sum() + ((X - X.mean(0)) @ uc).pow(2).sum())
             cap = float((((X - X.mean(0)) @ B) ** 2).sum())
+            # Would the cloud's own top-3 PCs do better? They draw the roundest
+            # cloud, but only place the text cloud correctly if the gap
+            # direction lies inside their span. Measure it rather than assume.
+            _, _, Vp = torch.pca_lowrank(X - X.mean(0), q=3, center=False)
+            keep = float((dv @ Vp).norm() / dv.norm())
+            sdp = ((X - X.mean(0)) @ Vp).std(0).tolist()
+            print(f"     top-3 PC alternative: holds {100*keep:4.1f}% of the gap vector, "
+                  f"sd=({sdp[0]:5.2f},{sdp[1]:5.2f},{sdp[2]:5.2f})")
+
             idx = torch.randperm(X.shape[0], generator=g)[: args.points]
             jdx = torch.randperm(Y.shape[0], generator=g)[: args.points]
             Pc = (X[idx] - ybar) @ B
@@ -96,6 +105,7 @@ def main():
                 "tag": tag, "G_mu": gmu, "n_image": int(X.shape[0]),
                 "var_captured": cap / tot, "sd_axes": sd,
                 "aspect": max(sd) / max(min(sd), 1e-9),
+                "pca3_gap_fraction": keep, "pca3_sd": sdp,
                 "trace_image": tot / (X.shape[0] - 1),
                 "trace_text": float(((Y - Y.mean(0)) ** 2).sum()) / (Y.shape[0] - 1),
                 "image_centroid": [gmu, 0.0, 0.0],
