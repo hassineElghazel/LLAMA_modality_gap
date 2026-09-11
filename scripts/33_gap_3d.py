@@ -46,14 +46,20 @@ def main():
     p.add_argument("--embeddings-dir", default="outputs/embeddings")
     p.add_argument("--out", default="outputs/metrics/gap_3d.json")
     p.add_argument("--points", type=int, default=600, help="points kept per cloud")
-    p.add_argument("--frame", choices=["variance", "displacement"], default="displacement",
+    p.add_argument("--frame", choices=["variance", "displacement", "per-condition"],
+                   default="displacement",
                    help="what axes 2-3 span. 'displacement' (default) uses the "
                         "leading directions of the OTHER conditions' centroid "
                         "offsets perpendicular to u, so every centroid is placed "
                         "at close to its true distance from the text cloud. "
                         "'variance' uses image-cloud variance instead, which "
                         "draws cloud shape better but can place centroids far "
-                        "short of their real G_mu.")
+                        "short of their real G_mu. 'per-condition' gives every "
+                        "condition its OWN frame -- its own gap direction, then "
+                        "its own leading variance orthogonal to it -- so each "
+                        "panel is exact in distance AND as round as the cloud "
+                        "allows. Panels are then separate views, for small "
+                        "multiples rather than one shared scene.")
     p.add_argument("--pc-source", choices=["base", "union"], default="union",
                    help="whose variance sets axes 2 and 3. 'union' pools every "
                         "condition so no single cloud is favoured; 'base' uses "
@@ -64,6 +70,44 @@ def main():
 
     emb = Path(args.embeddings_dir)
     g = torch.Generator().manual_seed(args.seed)
+
+    if args.frame == "per-condition":
+        out = {"frame": "per-condition", "n_points": args.points,
+               "axes": ["that condition's own gap direction",
+                        "its own image PC1 orthogonal to it",
+                        "its own image PC2 orthogonal to it"],
+               "origin": "that condition's text centroid", "conditions": []}
+        for tag in args.conditions:
+            X, Y = load_pair(emb, tag)
+            ybar = Y.mean(0)
+            dv = X.mean(0) - ybar
+            gmu = float(dv.norm()); uc = dv / dv.norm()
+            R = X - X.mean(0)
+            R = R - (R @ uc).unsqueeze(1) * uc
+            _, _, Vc = torch.pca_lowrank(R, q=4, center=False)
+            B = torch.stack([uc, Vc[:, 0], Vc[:, 1]], dim=1)
+            tot = float((R ** 2).sum() + ((X - X.mean(0)) @ uc).pow(2).sum())
+            cap = float((((X - X.mean(0)) @ B) ** 2).sum())
+            idx = torch.randperm(X.shape[0], generator=g)[: args.points]
+            jdx = torch.randperm(Y.shape[0], generator=g)[: args.points]
+            Pc = (X[idx] - ybar) @ B
+            sd = Pc.std(0).tolist()
+            out["conditions"].append({
+                "tag": tag, "G_mu": gmu, "n_image": int(X.shape[0]),
+                "var_captured": cap / tot, "sd_axes": sd,
+                "aspect": max(sd) / max(min(sd), 1e-9),
+                "trace_image": tot / (X.shape[0] - 1),
+                "trace_text": float(((Y - Y.mean(0)) ** 2).sum()) / (Y.shape[0] - 1),
+                "image_centroid": [gmu, 0.0, 0.0],
+                "image_xyz": Pc.tolist(), "text_xyz": ((Y[jdx] - ybar) @ B).tolist(),
+            })
+            print(f"[3d] {tag:14s} G_mu={gmu:8.3f}  sd=({sd[0]:5.2f},{sd[1]:5.2f},{sd[2]:5.2f})  "
+                  f"aspect {max(sd)/max(min(sd),1e-9):4.1f}:1  var_captured={100*cap/tot:4.1f}%")
+            del X, Y, R
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(out))
+        print(f"[3d] wrote {args.out} ({Path(args.out).stat().st_size/1024:.0f} KB)")
+        return
 
     # ----- frame, from the baseline only ------------------------------------
     Xb, Yb = load_pair(emb, args.base)
