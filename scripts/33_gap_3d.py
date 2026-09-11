@@ -46,6 +46,14 @@ def main():
     p.add_argument("--embeddings-dir", default="outputs/embeddings")
     p.add_argument("--out", default="outputs/metrics/gap_3d.json")
     p.add_argument("--points", type=int, default=600, help="points kept per cloud")
+    p.add_argument("--frame", choices=["variance", "displacement"], default="displacement",
+                   help="what axes 2-3 span. 'displacement' (default) uses the "
+                        "leading directions of the OTHER conditions' centroid "
+                        "offsets perpendicular to u, so every centroid is placed "
+                        "at close to its true distance from the text cloud. "
+                        "'variance' uses image-cloud variance instead, which "
+                        "draws cloud shape better but can place centroids far "
+                        "short of their real G_mu.")
     p.add_argument("--pc-source", choices=["base", "union"], default="union",
                    help="whose variance sets axes 2 and 3. 'union' pools every "
                         "condition so no single cloud is favoured; 'base' uses "
@@ -64,19 +72,36 @@ def main():
     gmu_base = float(u.norm())
     u = u / u.norm()
 
-    # Axes 2-3 span the image variance orthogonal to u. Pooling every condition
-    # keeps the frame from flattering the baseline: a frame fitted on one cloud
-    # can hold little of another's variance, which would draw the others as
-    # artificially tight blobs.
-    if args.pc_source == "base":
-        src = [Xb]
+    if args.frame == "displacement":
+        # Axes 2-3 span where the centroids actually went. Closure is not a
+        # translation down u: measured on this run, u's share of the offset falls
+        # to 6% by lambda_d=0.1, so a variance frame would draw the clouds much
+        # closer to the text than they are.
+        offs = []
+        for t_ in args.conditions:
+            if t_ == args.base:
+                continue
+            Xc, Yc = load_pair(emb, t_)
+            dd = Xc.mean(0) - Yc.mean(0)
+            offs.append(dd - (dd @ u) * u)     # ... perpendicular part only
+            del Xc, Yc
+        Dm = torch.stack(offs)                                  # (C-1, 4096)
+        V = torch.linalg.svd(Dm, full_matrices=False).Vh.T
+        nrm = Dm.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        cos = (Dm / nrm) @ (Dm / nrm).T
+        print("[3d] cosines between perpendicular offsets:\n" +
+              "\n".join("     " + "  ".join(f"{v:6.3f}" for v in r) for r in cos.tolist()))
     else:
-        src = [Xb] + [load_pair(emb, t_)[0] for t_ in args.conditions if t_ != args.base]
-    R = torch.cat([S_ - S_.mean(0) for S_ in src], dim=0)
-    R = R - (R @ u).unsqueeze(1) * u           # ... orthogonal to the gap axis
-    _, _, V = torch.pca_lowrank(R, q=6, center=False)
+        # Axes 2-3 span image variance orthogonal to u. Pooling every condition
+        # keeps the frame from flattering the baseline.
+        src = [Xb] if args.pc_source == "base" else \
+              [Xb] + [load_pair(emb, t_)[0] for t_ in args.conditions if t_ != args.base]
+        R = torch.cat([S_ - S_.mean(0) for S_ in src], dim=0)
+        R = R - (R @ u).unsqueeze(1) * u
+        _, _, V = torch.pca_lowrank(R, q=6, center=False)
+        del R, src
     basis = torch.stack([u, V[:, 0], V[:, 1]], dim=1)          # (4096, 3)
-    del Xb, R, src
+    del Xb
 
     orth = (basis.T @ basis - torch.eye(3)).abs().max()
     print(f"[3d] frame from {args.base}: G_mu={gmu_base:.3f}, "
@@ -108,12 +133,15 @@ def main():
             "var_captured": cap / tot,
             "trace_image": tot / (X.shape[0] - 1),
             "trace_text": float(((Y - Y.mean(0)) ** 2).sum()) / (Y.shape[0] - 1),
+            "centroid_in_frame": float(((X.mean(0) - Y.mean(0)) @ basis).norm()),
             "image_centroid": ((X.mean(0) - ybar) @ basis).tolist(),
             "text_centroid": ((Y.mean(0) - ybar) @ basis).tolist(),
             "image_xyz": take(X), "text_xyz": take(Y),
         })
+        c3 = float(((X.mean(0) - Y.mean(0)) @ basis).norm())
         print(f"[3d] {tag:14s} G_mu={gmu:8.3f}  along_u={along:8.3f}  perp={perp:7.3f}  "
-              f"({100*along/gmu:5.1f}% on axis)  var_captured={100*cap/tot:4.1f}%")
+              f"|centroid in frame|={c3:8.3f} ({100*c3/gmu:5.1f}% of G_mu)  "
+              f"var_captured={100*cap/tot:4.1f}%")
         del X, Y, Xc
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
