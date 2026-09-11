@@ -116,6 +116,25 @@ if [[ "${RESUME:-0}" == "1" ]]; then
   # against the same horizon.
   [[ -f "${CKPT}" ]] || { echo "[long] RESUME=1 but ${CKPT} not found" >&2; exit 5; }
   : "${SUBSET:?RESUME=1 requires SUBSET (the original --subset-size, e.g. 48928)}"
+
+  # The scale and rank pins are captured on the FIRST distance step of a process
+  # (stage2_distance_sft.py:239,253), when the connector is still at C2-init. A
+  # resumed process would recapture them from the already-moved connector and
+  # silently re-anchor the scale pin to a COMPRESSED cloud -- the one thing the
+  # pin exists to prevent. Recover the original values from the interrupted
+  # run's log, or take them from the environment.
+  if [[ -z "${BTRACE0:-}" || -z "${EFFRANK0:-}" ]]; then
+      PINS_LOG="${PINS_LOG:-$(grep -l 'captured btrace0=' outputs/logs/cloc_long_*.out 2>/dev/null | tail -1)}"
+      [[ -n "${PINS_LOG}" ]] || { echo "[long] no log with a pin capture; pass BTRACE0= and EFFRANK0=" >&2; exit 6; }
+      BTRACE0="${BTRACE0:-$(grep -o 'btrace0=[0-9.]*' "${PINS_LOG}" | head -1 | cut -d= -f2)}"
+      EFFRANK0="${EFFRANK0:-$(grep -o 'effrank0=[0-9.]*' "${PINS_LOG}" | head -1 | cut -d= -f2)}"
+      echo "[long] pins recovered from ${PINS_LOG}"
+  fi
+  [[ -n "${BTRACE0}" && -n "${EFFRANK0}" ]] \
+      || { echo "[long] could not determine btrace0/effrank0; pass them explicitly" >&2; exit 6; }
+  FLAGS+=(--btrace0 "${BTRACE0}" --effrank0 "${EFFRANK0}")
+  echo "[long] pins held at btrace0=${BTRACE0} effrank0=${EFFRANK0} (C2-init, not recaptured)"
+
   echo "[long] RESUME: continuing ${CKPT} with subset=${SUBSET}"
   tg_notify "CLOC-LONG resuming from ${CKPT} (subset ${SUBSET}) on $(hostname)."
   train_with_retry "${SUBSET}" 1
