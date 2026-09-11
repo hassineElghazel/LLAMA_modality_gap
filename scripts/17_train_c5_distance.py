@@ -224,7 +224,18 @@ def main():
     cfg["total_steps"] = math.ceil(n_items / (batch_size * accum)) * num_epochs
     print(f"[c5] AR schedule: total_steps={cfg['total_steps']:,} "
           f"(items={n_items:,} eff_batch={batch_size * accum} epochs={num_epochs})")
-    ar_dataloader = stage2_entry._iter_batches(ar_dataset, tokenizer, image_token_id, batch_size)
+    # On resume the step counter is restored but the dataset iterator is not, so
+    # advance past the items the checkpointed steps already consumed. Without it
+    # the run replays its first start_step*eff_batch items and never reaches the
+    # tail of the subset.
+    skip_items = 0
+    if args.resume and Path(args.resume).exists():
+        resumed_step = int(torch.load(args.resume, map_location="cpu").get("step", 0))
+        skip_items = resumed_step * batch_size * accum
+        print(f"[c5] resume: skipping {skip_items:,} items already seen "
+              f"by step {resumed_step:,}")
+    ar_dataloader = stage2_entry._iter_batches(ar_dataset, tokenizer, image_token_id,
+                                               batch_size, skip_items=skip_items)
 
     # ----- distance data: same image stream as C4's contrastive iterator -----
     captions = CocoTrainCaptions(d_cfg["caption_annotations"])

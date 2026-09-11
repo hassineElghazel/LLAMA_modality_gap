@@ -118,9 +118,20 @@ def _llava_collate(items, tokenizer, image_token_id: int, max_length: int = 512)
     return {"images": images, "input_ids": input_ids, "labels": labels}
 
 
-def _iter_batches(dataset, tokenizer, image_token_id, batch_size: int) -> Iterator[dict]:
+def _iter_batches(dataset, tokenizer, image_token_id, batch_size: int,
+                  skip_items: int = 0) -> Iterator[dict]:
+    """Yield collated batches, optionally dropping the first ``skip_items``.
+
+    ``skip_items`` exists for resume. The step counter is restored from the
+    checkpoint but the dataset iterator is not, so without it a resumed run
+    replays the items it already trained on and never reaches the tail of the
+    subset. Skipping is free: the dataset yields paths and conversations, and
+    only the collate below opens an image.
+    """
     buf = []
-    for item in dataset:
+    for index, item in enumerate(dataset):
+        if index < skip_items:
+            continue
         buf.append(item)
         if len(buf) == batch_size:
             batch = _llava_collate(buf, tokenizer, image_token_id)
