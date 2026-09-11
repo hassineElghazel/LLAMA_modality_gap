@@ -124,10 +124,26 @@ if [[ "${RESUME:-0}" == "1" ]]; then
   # pin exists to prevent. Recover the original values from the interrupted
   # run's log, or take them from the environment.
   if [[ -z "${BTRACE0:-}" || -z "${EFFRANK0:-}" ]]; then
-      PINS_LOG="${PINS_LOG:-$(grep -l 'captured btrace0=' outputs/logs/cloc_long_*.out 2>/dev/null | tail -1)}"
-      [[ -n "${PINS_LOG}" ]] || { echo "[long] no log with a pin capture; pass BTRACE0= and EFFRANK0=" >&2; exit 6; }
-      BTRACE0="${BTRACE0:-$(grep -o 'btrace0=[0-9.]*' "${PINS_LOG}" | head -1 | cut -d= -f2)}"
-      EFFRANK0="${EFFRANK0:-$(grep -o 'effrank0=[0-9.]*' "${PINS_LOG}" | head -1 | cut -d= -f2)}"
+      if [[ -z "${PINS_LOG:-}" ]]; then
+          # Only logs that actually captured anchors are candidates, and more
+          # than one means more than one run: refuse rather than guess which
+          # produced this checkpoint.
+          _pin_logs=()          # a while-read loop, not mapfile: bash 3.2 has no mapfile
+          while IFS= read -r _f; do _pin_logs+=("${_f}"); done \
+              < <(grep -l 'captured btrace0=' outputs/logs/cloc_long_*.out 2>/dev/null || true)
+          case "${#_pin_logs[@]}" in
+            0) echo "[long] no log captured a pin anchor; pass BTRACE0= and EFFRANK0=" >&2; exit 6 ;;
+            1) PINS_LOG="${_pin_logs[0]}" ;;
+            *) echo "[long] several logs captured anchors, cannot tell which made ${CKPT}:" >&2
+               printf '  %s\n' "${_pin_logs[@]}" >&2
+               echo "[long] set PINS_LOG=<one of them>, or BTRACE0= and EFFRANK0= directly" >&2
+               exit 6 ;;
+          esac
+      fi
+      # Match on "captured": the startup line prints "btrace0=auto@step1", which
+      # an unanchored pattern hits first and yields an empty value.
+      BTRACE0="${BTRACE0:-$(grep -o 'captured btrace0=[0-9.]*' "${PINS_LOG}" | head -1 | cut -d= -f2)}"
+      EFFRANK0="${EFFRANK0:-$(grep -o 'captured effrank0=[0-9.]*' "${PINS_LOG}" | head -1 | cut -d= -f2)}"
       echo "[long] pins recovered from ${PINS_LOG}"
   fi
   [[ -n "${BTRACE0}" && -n "${EFFRANK0}" ]] \
