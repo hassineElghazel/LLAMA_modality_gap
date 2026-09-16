@@ -29,6 +29,21 @@
 #   SPS=113 sbatch ...        # trust a known rate, skip calibration
 #   SKIP_TRAIN=1 sbatch ...   # re-run evaluation on an existing checkpoint
 #   RESUME=1 SUBSET=48928 sbatch ...   # continue an interrupted run
+#   SUBSET=100000 TAG=Cloc_fresh100k sbatch ...   # fix the horizon yourself
+#
+# SUBSET on a FRESH run overrides both phases: you are choosing the cosine
+# horizon, so nothing needs measuring. A horizon larger than the wall can hold
+# is legitimate -- the wall kills leg one mid-cosine, the every-50-step
+# checkpoint survives, and leg two continues it:
+#
+#   leg 1:  SUBSET=100000 TAG=Cloc_fresh100k sbatch scripts/submit_cloc_long.sbatch
+#   leg 2:  RESUME=1 SUBSET=100000 TAG=Cloc_fresh100k \
+#           BTRACE0=<captured> EFFRANK0=<captured> sbatch scripts/submit_cloc_long.sbatch
+#
+# Leg two MUST be given the anchors leg one captured (grep 'captured btrace0='
+# in leg one's log): a resumed process re-anchors the scale pin to the moved
+# connector otherwise. With several Cloc_long logs on disk the script can no
+# longer guess which one is yours, and will refuse rather than pick wrong.
 #
 # RESUME skips both phases and picks the checkpoint up where it stopped. SUBSET
 # must repeat the original value, since that is what fixed total_steps.
@@ -159,6 +174,19 @@ if [[ "${RESUME:-0}" == "1" ]]; then
 elif [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
   [[ -f "${CKPT}" ]] && { echo "[long] refusing to overwrite ${CKPT}; use SKIP_TRAIN=1, RESUME=1, or a new TAG" >&2; exit 3; }
 
+  if [[ -n "${SUBSET:-}" ]]; then
+    # The horizon was chosen by hand. Measuring the node cannot change it, so
+    # both phases are skipped; the wall clock is now an outcome, not an input.
+    STEPS=$(( SUBSET / 32 ))
+    echo "[long] explicit horizon: ${STEPS} steps (subset=${SUBSET}); calibration skipped"
+    echo "[long] if the wall cuts this short, continue with:"
+    echo "[long]   RESUME=1 SUBSET=${SUBSET} TAG=${TAG} BTRACE0=<captured> EFFRANK0=<captured> sbatch $0"
+    tg_notify "CLOC-LONG (${TAG}) fixed at ${STEPS} steps (subset ${SUBSET}) on $(hostname).
+Wall ${WALL_H} h. If it is cut short, resume with RESUME=1 SUBSET=${SUBSET} TAG=${TAG}."
+    train_with_retry "${SUBSET}" 0
+    tg_notify "CLOC-LONG: training done (${STEPS} steps). Evaluating."
+  else
+
   # ---------------- PHASE A: calibrate --------------------------------------
   if [[ -z "${SPS:-}" ]]; then
       CAL_LOG="outputs/logs/cloc_calib_${SLURM_JOB_ID}.log"
@@ -188,6 +216,7 @@ Measured ${SPS} s/step on $(hostname). Annealed cosine, wall ${WALL_H} h."
 
   train_with_retry "${SUBSET}" 0
   tg_notify "CLOC-LONG: training done (${STEPS} steps). Evaluating."
+  fi
 else
   echo "[long] SKIP_TRAIN=1: evaluating existing ${CKPT}"
   [[ -f "${CKPT}" ]] || { echo "[long] ${CKPT} not found" >&2; exit 4; }

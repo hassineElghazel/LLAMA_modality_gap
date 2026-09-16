@@ -29,25 +29,27 @@ conda activate llama_gap
 source ~/.telegram_env 2>/dev/null || true
 
 CFG=configs/description_eval.yaml
-TAG=Cloc_long_dd256
-CKPT=outputs/checkpoints/stage2_vlm_Cloc_long.pt
+# TAG=<cond>_dd256 selects what is GENERATED; the checkpoint is derived from it,
+# so TAG=Cloc_100k_dd256 evaluates outputs/checkpoints/stage2_vlm_Cloc_100k.pt.
+TAG="${TAG:-Cloc_long_dd256}"
+CKPT="${CKPT:-outputs/checkpoints/stage2_vlm_${TAG%_dd256}.pt}"
 CLIP_MODEL="${CLIP_MODEL:-$HOME/clip_b32}"
 BASE=C3pinr_dd256
-ALL="C3pinr_dd256 Cscale1500_dd256 Crank15_dd256 Corient_dd256 Cloc_dd256 Clocorient_dd256 C5bp_lam0p1_dd256 C4bp_lam0p9_dd256 ${TAG}"
+ALL="C3pinr_dd256 Cscale1500_dd256 Crank15_dd256 Corient_dd256 Cloc_dd256 Clocorient_dd256 C5bp_lam0p1_dd256 C4bp_lam0p9_dd256 Cloc_long_dd256 ${TAG}"
 
 tg() { [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]] && return 0
        curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
          --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=$1" >/dev/null || true; }
-trap 'tg "dd256 Cloc_long FAILED (job ${SLURM_JOB_ID}) line $1"' ERR
+trap 'tg "dd256 ${TAG} FAILED (job ${SLURM_JOB_ID}) line $1"' ERR
 
 cd ~/LLAMA_modality_gap
 [[ -f "${CKPT}" ]] || { echo "[dd256] ${CKPT} not found" >&2; exit 3; }
 nvidia-smi --query-gpu=name --format=csv,noheader || true
-tg "dd256 eval of Cloc_long started (job ${SLURM_JOB_ID})"
+tg "dd256 eval of ${TAG} started (job ${SLURM_JOB_ID})"
 
 # keep the eight-condition table recoverable before 19_chair overwrites it
 S=outputs/metrics/chair_summary_dd256.json
-[[ -f "$S" ]] && cp -p "$S" "${S%.json}.pre_long.json"
+[[ -f "$S" ]] && cp -p "$S" "${S%.json}.pre_${SLURM_JOB_ID}.json"
 
 echo "==================== DESCRIBE ${TAG} (1300 images, 256 tokens) ===================="
 python scripts/08_run_captioning.py --config "${CFG}" --condition "${TAG}" --vlm-checkpoint "${CKPT}"
@@ -59,13 +61,14 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/15_clipscore.py \
 echo "==================== CHAIR, all conditions + ${TAG} ===================="
 KEEP=""
 for t in ${ALL}; do
+  case " ${KEEP} " in *" ${t} "*) continue ;; esac  # ALL may name ${TAG} twice
   [[ -f "outputs/predictions/captions_${t}.json" ]] && KEEP="${KEEP} ${t}" || echo "[skip] ${t} (no predictions)"
 done
 python scripts/19_chair.py --conditions ${KEEP} --baseline "${BASE}" \
     --config "${CFG}" --out "${S}"
 
-python - <<'PYEOF'
-import json, pathlib
+TAG="${TAG}" python - <<'PYEOF'
+import json, os, pathlib
 M = pathlib.Path("outputs/metrics")
 ch = json.loads((M/"chair_summary_dd256.json").read_text()).get("per_condition", {})
 def clip(t):
@@ -73,6 +76,9 @@ def clip(t):
     return json.loads(p.read_text())["CLIPScore"] if p.exists() else None
 ROWS = [("all-pinned","C3pinr_dd256"), ("Cloc","Cloc_dd256"),
         ("Clocorient","Clocorient_dd256"), ("Cloc_long","Cloc_long_dd256")]
+tag = os.environ["TAG"]
+if tag not in [t for _, t in ROWS]:
+    ROWS.append((tag.replace("_dd256", ""), tag))
 print(f"\n{'condition':14s} {'CLIP':>8s} {'CHAIR_s':>9s} {'CHAIR_i':>9s} {'recall':>8s} {'words':>7s}")
 print("-"*60)
 for lab, t in ROWS:
@@ -81,10 +87,10 @@ for lab, t in ROWS:
     print(f"{lab:14s} {(f'{c:.4f}' if c else 'n/a'):>8s} {f('chair_s'):>9s} {f('chair_i'):>9s} "
           f"{f('recall'):>8s} {f('avg_len'):>7s}")
 print(f"{'LLaVA-1.5-7B':14s} {0.7910:8.4f} {0.5069:9.4f} {0.1518:9.4f} {0.7738:8.4f} {82.4:7.1f}   <- reference")
-b, l = clip("C3pinr_dd256"), clip("Cloc_long_dd256")
+b, l = clip("C3pinr_dd256"), clip(tag)
 if b and l:
     print(f"\nspan baseline -> reference covered on CLIPScore: {100*(l-b)/(0.7910-b):.0f}%")
 PYEOF
 
-tg "dd256 eval of Cloc_long done (job ${SLURM_JOB_ID})"
+tg "dd256 eval of ${TAG} done (job ${SLURM_JOB_ID})"
 echo "[dd256] done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
