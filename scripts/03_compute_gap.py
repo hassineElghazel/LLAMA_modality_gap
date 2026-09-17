@@ -46,6 +46,8 @@ CONDITIONS = ("C0_random", "C1_stage2", "C2_stage1", "C3_stage1", "C3_stage2",
               "Cloc",
               # Cloc_long = the same recipe trained to an annealed cosine over 2,250 steps.
               "Cloc_long",
+              # Cloc_80k / Cloc_100k = Cloc_long continued to a larger annealed cosine.
+              "Cloc_80k", "Cloc_100k",
               # Corient = clean-orientation: InfoNCE drive (lambda_o=0.9) + location-pin +
               # scale-pin + rank-pin (isolate ORIENTATION, hold the other 3 axes).
               "Corient",

@@ -82,6 +82,9 @@ CONDITIONS = {
     "Cloc":        {"connector": "outputs/checkpoints/stage2_vlm_Cloc.pt",        "uses_stage2": True},
     # long annealed run of the method (subset-size sets the cosine horizon):
     "Cloc_long":  {"connector": "outputs/checkpoints/stage2_vlm_Cloc_long.pt", "uses_stage2": True},
+    # Cloc_long continued onto a larger annealed cosine (submit_cloc_continue.sbatch).
+    "Cloc_80k":   {"connector": "outputs/checkpoints/stage2_vlm_Cloc_80k.pt",  "uses_stage2": True},
+    "Cloc_100k":  {"connector": "outputs/checkpoints/stage2_vlm_Cloc_100k.pt", "uses_stage2": True},
     # seed repeats of the attribution pair (same recipe, --seed varied):
     "C3pinr_s1":  {"connector": "outputs/checkpoints/stage2_vlm_C3pinr_s1.pt", "uses_stage2": True},
     "C3pinr_s2":  {"connector": "outputs/checkpoints/stage2_vlm_C3pinr_s2.pt", "uses_stage2": True},

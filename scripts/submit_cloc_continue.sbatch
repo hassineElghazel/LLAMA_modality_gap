@@ -115,6 +115,7 @@ if [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
   [[ -f "${SRC_SIDE}" ]] || { echo "[cont] sidecar ${SRC_SIDE} not found" >&2; exit 5; }
 
   SUBSET="${SUBSET}" BTRACE0="${BTRACE0}" RESUME_SRC="${RESUME_SRC}" SRC_SIDE="${SRC_SIDE}" \
+  TAG="${TAG}" EVAL_H="${EVAL_H}" \
   python - <<'PYEOF'
 import json, math, os, sys
 from pathlib import Path
@@ -171,6 +172,28 @@ n = len(LLaVAInstruct150KDataset(root=d["local_path"], image_root=d["image_root"
 print(f"[cont] manifest holds {n:,} rows at seed {cfg['seed']}")
 if n < subset:
     sys.exit(f"[cont] asked for {subset:,} items but only {n:,} exist. Lower SUBSET.")
+
+# 5. the evaluation scripts validate --condition against a hardcoded CONDITIONS
+#    list. An unregistered tag aborts the eval on its first line, AFTER training
+#    has finished: that is how job 91561 lost its evaluation after 33 h. Parse the
+#    lists rather than importing the scripts, which would pull in torch.
+import ast
+tag = os.environ["TAG"]
+for script in ("scripts/07_extract_projected.py", "scripts/03_compute_gap.py"):
+    known = None
+    for node in ast.walk(ast.parse(Path(script).read_text())):
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", None) == "CONDITIONS" for t in node.targets):
+            known = ast.literal_eval(node.value)
+            break
+    if known is None:
+        sys.exit(f"[cont] could not read CONDITIONS from {script}; aborting rather "
+                 "than training into an eval that may reject the tag.")
+    if tag not in known:
+        sys.exit(f"[cont] {script} does not know condition '{tag}'. Add it to its "
+                 "CONDITIONS before training, or the evaluation will fail after "
+                 "the run completes.")
+print(f"[cont] condition '{tag}' is registered in both evaluation scripts")
 
 est = (total - done) * 168.6 / 3600
 print(f"[cont] estimate: {est:.1f} h training at 168.6 s/step, "
