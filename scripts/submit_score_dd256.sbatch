@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32GB
-#SBATCH --time=02:00:00
+#SBATCH --time=08:00:00
 #SBATCH --no-requeue
 #SBATCH --output=outputs/logs/score_dd256_%j.out
 #SBATCH --error=outputs/logs/score_dd256_%j.err
@@ -29,8 +29,14 @@
 # that model will look good on BLEU largely for being shorter.
 #
 # No GPU work happens here; the allocation exists only because the partition
-# schedules that way. SPICE is a Java process and is the bulk of the runtime,
-# roughly ten minutes per condition at n=1300.
+# schedules that way. SPICE is a Java process and is the bulk of the runtime:
+# budget ~1.5 h PER CONDITION at n=1300, not minutes. At ~100 words a caption
+# exceeds the length SPICE can use as a cache filename, so it logs 'Caption may
+# be too long' / 'Could not cache item', silently disables its cache, and
+# reparses every caption through the Stanford pipeline. Those lines are noise,
+# but the lost caching is why job 91603 died on a 2 h wall after one condition.
+# Each condition writes its own metrics file as it finishes, so a rerun only
+# needs the conditions that are missing.
 # ============================================================================
 
 set -Eeuo pipefail
