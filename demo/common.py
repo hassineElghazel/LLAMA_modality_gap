@@ -111,7 +111,15 @@ class ClipScorer:
             device = ("cuda" if torch.cuda.is_available()
                       else "mps" if torch.backends.mps.is_available() else "cpu")
         self.device = device
-        self.model = CLIPModel.from_pretrained(self.MODEL).to(device).eval()
+        # Prefer safetensors, as scripts/15_clipscore.py does: transformers
+        # >= 4.56 refuses torch.load on torch < 2.6 (CVE-2025-32434), so the
+        # .bin weights are unusable on the cluster. Some caches hold only the
+        # .bin, so fall back rather than hard-fail.
+        try:
+            self.model = CLIPModel.from_pretrained(
+                self.MODEL, use_safetensors=True).to(device).eval()
+        except (OSError, EnvironmentError):
+            self.model = CLIPModel.from_pretrained(self.MODEL).to(device).eval()
         self.proc = CLIPProcessor.from_pretrained(self.MODEL)
 
     def score(self, image, caption: str) -> float:
