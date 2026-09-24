@@ -38,6 +38,11 @@ def rows():
             except ValueError: continue
 
 def main():
+    if not TEX.exists():
+        print("thesis source not found:\n  " + str(TEX) +
+              "\nThis test parses the thesis figures, so it only runs where the\n"
+              "LaTeX lives (your laptop). Nothing is wrong with the demo.")
+        return 0
     preds, cache = {}, {}
     chair, clip = Chair(), ClipScorer()
     ok = bad = skip = 0
