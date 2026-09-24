@@ -20,7 +20,8 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "demo"))
-from common import CURATED, MODELS, CKPT, Chair, ClipScorer, image_path  # noqa: E402
+from common import (CURATED, MODELS, CKPT, Chair, ClipScorer, image_path,
+                    build_vlm)                                    # noqa: E402
 
 BASE, DRIVE = list(MODELS)                      # panel order, left then right
 ACCENT, INK, MUTE, LINE = "#c06a3e", "#262626", "#707070", "#dcdcd8"
@@ -40,6 +41,7 @@ CSS = f"""
   font-size:.84rem; color:{MUTE}; }}
 .metrics b {{ color:{ACCENT}; font-size:.96rem; }}
 #status {{ font-size:.8rem; color:{MUTE}; }}
+.hint {{ font-size:.76rem; color:#8a8a86; margin:8px 0 2px; }}
 #foot {{ font-size:.76rem; color:#a1a1a1; text-align:center; margin-top:10px; }}
 .tag {{ font-size:.68rem; color:#fff; background:{MUTE}; border-radius:3px;
   padding:1px 6px; margin-left:6px; vertical-align:2px; }}
@@ -75,8 +77,8 @@ def metrics_html(m: dict, curated: bool) -> str:
 
 
 class Backend:
-    def __init__(self, live: bool, timeout: float):
-        self.live, self.timeout = live, timeout
+    def __init__(self, live: bool, timeout: float, seed: int = 42):
+        self.live, self.timeout, self.seed = live, timeout, seed
         self.cache = json.loads((ROOT / "demo" / "cache.json").read_text())
         self.chair, self.clip = Chair(), ClipScorer()
         self.vlms, self.prompt, self.gen = {}, None, None
@@ -101,10 +103,20 @@ class Backend:
         lora = load_yaml(ROOT / "configs/training_stage2.yaml").get("lora")
         for label, ck in CKPT.items():
             t0 = time.time(); log(f"[demo] loading {label} …")
-            self.vlms[label] = dc.build(str(ROOT / ck), enc, proj, llm, lora)
+            # build_vlm seeds the load (resize_token_embeddings draws the new
+            # <image> row randomly) AND calls .eval(), without which LoRA
+            # dropout stays on and every generation differs.
+            self.vlms[label] = build_vlm(dc, ck, (enc, proj, llm, lora),
+                                         seed=self.seed)
             log(f"[demo] {label} up in {time.time()-t0:.0f}s")
+
+        warm_id = CURATED[0][0]                       # one real generation each,
+        img = Image.open(image_path(warm_id)).convert("RGB")   # so the first
+        for label in self.vlms:                       # live click is not slow
+            t0 = time.time(); self._generate(label, img)
+            log(f"[demo] {label} warm in {time.time()-t0:.1f}s")
         self.ready = True
-        return f"ready — live on GPU · prompt {self.prompt!r}"
+        return f"ready — live on GPU · both models warm"
 
     def _generate(self, label, img):
         import torch
@@ -131,13 +143,15 @@ class Backend:
                 print("[demo] live failed ->", e, file=sys.stderr)
                 traceback.print_exc()
                 if not curated:
-                    return f"(generation failed: {type(e).__name__})", {
+                    return ("Generation failed on this upload. Click one of the "
+                            "ready examples below — those always work."), {
                         "caption": "", "clipscore": 0.0, "words": 0, "H": 0,
                         "recall": None, "hallucinated": []}, "error"
         if curated:
             m = dict(self.cache["entries"][str(image_id)]["models"][label])
             return m["caption"], m, "cached"
-        cap = "(upload needs live mode — no cached caption for this image)"
+        cap = ("Cached mode has no caption for an unseen image. "
+           "Click one of the ready examples below.")
         return cap, {"caption": "", "clipscore": 0.0, "words": 0, "H": 0,
                      "recall": None, "hallucinated": []}, "cached"
 
@@ -149,15 +163,18 @@ def build_ui(be: Backend):
     with gr.Blocks(css=CSS, title="Closing the location gap", theme=gr.themes.Soft(
             primary_hue="orange", neutral_hue="gray")) as ui:
         gr.HTML('<div id="hdr"><h1>CLOSING THE LOCATION GAP</h1>'
-                '<p>Same image, same budget, same pins — one axis released.</p></div>')
+                '<p>Drop in any image. Same budget, same pins, one axis released.</p></div>')
         state = gr.State(None)
         with gr.Row():
             with gr.Column(scale=5):
-                gallery = gr.Gallery(thumbs, label="COCO val2017 — thesis examples first",
-                                     columns=4, height=330, object_fit="cover",
-                                     allow_preview=False)
-                upload = gr.Image(label="or upload", type="pil", height=170)
+                upload = gr.Image(label="Drop an image here", type="pil", height=300,
+                                  sources=["upload", "clipboard"])
                 status = gr.HTML('<div id="status">loading…</div>', elem_id="status")
+                gr.HTML('<div class="hint">Ready examples — always work, and carry '
+                        'COCO ground truth so H and recall are shown.</div>')
+                gallery = gr.Gallery(thumbs, label=None, columns=6, height=150,
+                                     object_fit="cover", allow_preview=False,
+                                     show_label=False)
             with gr.Column(scale=7):
                 with gr.Row():
                     panels = {}
@@ -169,42 +186,58 @@ def build_ui(be: Backend):
                             panels[label] = (cap, met)
         gr.HTML(f'<div id="foot">{FOOTER}</div>')
 
-        def respond(evt_or_img, image_id):
+        def respond(img, image_id):
             """Stream both panels; left first, then right (sequential on 11 GB)."""
-            if isinstance(evt_or_img, Image.Image):
-                img, iid = evt_or_img.convert("RGB"), None
+            if img is None:
+                return
+            from PIL import ImageOps
+            iid = image_id
+            if iid is None:
+                img = ImageOps.exif_transpose(img).convert("RGB")
+                if max(img.size) > 1600:
+                    img.thumbnail((1600, 1600))
             else:
-                iid = image_id
                 img = Image.open(image_path(iid)).convert("RGB")
             outs = {l: ('<div class="panel cap"></div>', "") for l in (BASE, DRIVE)}
+
+            def frame(msg):
+                return (outs[BASE][0], outs[BASE][1], outs[DRIVE][0], outs[DRIVE][1],
+                        f'<div id="status">{msg}</div>')
+
             for label in (BASE, DRIVE):
-                yield (outs[BASE][0], outs[BASE][1], outs[DRIVE][0], outs[DRIVE][1],
-                       f'<div id="status">generating — {label}…</div>')
+                yield frame(f"generating — {label}…")
                 cap, m, src = be.run(label, img, iid)
-                tag = f'<span class="tag">{src}</span>' if src != "live" else ""
-                shown = ""
-                for k in range(1, len(cap.split()) + 1):          # token-ish stream
-                    shown = " ".join(cap.split()[:k])
-                    body = highlight(shown, m.get("hallucinated", []), be.chair.inv,
-                                     be.chair.singularize) \
-                        if iid is not None else shown
+                tag = (f'<span class="tag">{src}</span>' if src != "live" else "")
+                words = cap.split()
+                for k in range(1, len(words) + 1):
+                    shown = " ".join(words[:k])
+                    body = (highlight(shown, m.get("hallucinated", []), be.chair.inv,
+                                      be.chair.singularize) if iid is not None else shown)
                     outs[label] = (f'<div class="panel cap">{body}{tag}</div>', "")
-                    if k % 4 == 0 or k == len(cap.split()):
-                        yield (outs[BASE][0], outs[BASE][1], outs[DRIVE][0],
-                               outs[DRIVE][1],
-                               f'<div id="status">generating — {label}…</div>')
+                    if k % 4 == 0 or k == len(words):
+                        yield frame(f"generating — {label}…")
                         time.sleep(0.012)
                 outs[label] = (outs[label][0], metrics_html(m, iid is not None))
-            yield (outs[BASE][0], outs[BASE][1], outs[DRIVE][0], outs[DRIVE][1],
-                   '<div id="status">ready</div>')
+                if src == "error":
+                    yield frame("generation failed — click a ready example below")
+                    return
+            note = "" if iid is not None else "  ·  uploaded image: no ground truth"
+            yield frame("ready" + note)
 
         sink = [panels[BASE][0], panels[BASE][1], panels[DRIVE][0], panels[DRIVE][1],
                 status]
+
         def pick(evt: gr.SelectData):
             return ids[evt.index]
 
-        gallery.select(pick, None, state).then(respond, [state, state], sink)
-        upload.upload(respond, [upload, gr.State(None)], sink)
+        def from_gallery(iid):
+            yield from respond(None if iid is None else "curated", iid)
+
+        gallery.select(pick, None, state).then(
+            lambda iid: None, state, upload).then(
+            respond, [gr.State("curated"), state], sink)
+        upload.upload(lambda: None, None, state).then(
+            respond, [upload, state], sink)
         ui.load(lambda: f'<div id="status">{be.load()}</div>', None, status)
     return ui
 
@@ -215,12 +248,13 @@ def main():
     g.add_argument("--live", action="store_true")
     g.add_argument("--cached", action="store_true")
     ap.add_argument("--timeout", type=float, default=45.0)
+    ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--port", type=int, default=7860)
     ap.add_argument("--share", action="store_true")
     ap.add_argument("--host", default="127.0.0.1",
                     help="0.0.0.0 to expose on the LAN; 127.0.0.1 is\n                          enough for an SSH -L tunnel")
     a = ap.parse_args()
-    be = Backend(live=a.live, timeout=a.timeout)
+    be = Backend(live=a.live, timeout=a.timeout, seed=a.seed)
     build_ui(be).queue().launch(server_name=a.host, server_port=a.port,
                                 share=a.share, show_api=False, quiet=False)
 

@@ -134,3 +134,22 @@ class ClipScorer:
             te = te / te.norm(dim=-1, keepdim=True)
             cos = float((ie * te).sum(-1).item())
         return self.W * max(cos, 0.0)
+
+
+def build_vlm(dc, ckpt_rel: str, cfgs, eval_mode: bool = True, seed: int = 42):
+    """build() + the .eval() that the repo's captioning path omits.
+
+    get_peft_model returns the wrapper in TRAIN mode, so the injected
+    lora_dropout modules (p = 0.05 per configs/training_stage2.yaml) stay active
+    during generation. scripts/08_run_captioning.py and
+    scripts/30_demo_caption.py both omit .eval(), which makes generation
+    stochastic. eval_mode=False reproduces that original behaviour.
+    """
+    import torch
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    vlm = dc.build(str(ROOT / ckpt_rel), *cfgs)
+    if eval_mode:
+        vlm._llm.eval()
+    return vlm

@@ -12,11 +12,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "demo"))
-from common import CKPT, MODELS, image_path                        # noqa: E402
+from common import CKPT, MODELS, image_path, build_vlm             # noqa: E402
 from src.utils.io import load_yaml                                 # noqa: E402
 from src.data.coco_val2017_loader import load_image                # noqa: E402
 
 IMAGES = [85823, 9914, 113403, 134882, 34760]     # zebras, sandwich, teddy, cat, bathroom
+TRAIN_MODE = "--train-mode" in sys.argv          # reproduce the thesis's
+                                                 # dropout-on generation
 
 
 def main() -> int:
@@ -30,14 +32,16 @@ def main() -> int:
     proj = load_yaml(ROOT / "configs/projector.yaml")
     llm = load_yaml(ROOT / "configs/llm.yaml")
     lora = load_yaml(ROOT / "configs/training_stage2.yaml").get("lora")
-    print(f"prompt   : {prompt!r}\ngeneration: {gen}\n")
+    print(f"prompt   : {prompt!r}\ngeneration: {gen}")
+    print(f"mode     : {'TRAIN (dropout on, as the thesis ran)' if TRAIN_MODE else 'EVAL (deterministic)'}\n")
 
     bad = 0
     for label, ck in CKPT.items():
         ref = {d["image_id"]: d["caption"] for d in
                json.loads((ROOT / "outputs/predictions" / MODELS[label]).read_text())}
         t0 = time.time()
-        vlm = dc.build(str(ROOT / ck), enc, proj, llm, lora)
+        vlm = build_vlm(dc, ck, (enc, proj, llm, lora),
+                        eval_mode=not TRAIN_MODE)
         print(f"== {label}   load {time.time()-t0:.0f}s")
         for iid in IMAGES:
             src = image_path(iid)
