@@ -4,7 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source demo/_env.sh
-export GRADIO_ANALYTICS_ENABLED=False HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1} \
-       TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
+# Offline is OPT-IN, not the default: the CLIP ViT-B/32 safetensors may not be
+# cached on the compute node, and transformers >= 4.56 cannot load the .bin on
+# torch < 2.6. Set HF_HUB_OFFLINE=1 yourself once the cache is warm.
+export GRADIO_ANALYTICS_ENABLED=False
 exec "$PY" demo/app.py --live --port "${PORT:-7860}" --host "${HOST:-127.0.0.1}" \
      --timeout "${TIMEOUT:-45}"
