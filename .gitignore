@@ -11,6 +11,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.jpg
+*.png
 *.egg
 *.egg-info/
 .eggs/

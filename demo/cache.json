@@ -1,0 +1,651 @@
+{
+ "built": "2026-09-24 17:02:42",
+ "provenance": {
+  "captions": {
+   "all-pinned (baseline)": "outputs/predictions/captions_C3pinr_dd256.json",
+   "Cloc_80k (location drive)": "outputs/predictions/captions_Cloc_80k_dd256.json"
+  },
+  "note": "captions are verbatim thesis dd256 generations; CLIPScore and CHAIR recomputed by demo/build_cache.py",
+  "clip_model": "openai/clip-vit-base-patch32",
+  "clip_w": 2.5,
+  "chair_gt_source": "segments+captions",
+  "image_root": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images"
+ },
+ "entries": {
+  "85823": {
+   "image_id": 85823,
+   "title": "Zebras  (thesis Fig. 4.8)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000085823.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a group of horses standing in a grassy field. There are two horses in the front, and two more horses in the back. The horses are grazing and appear to be enjoying the grass.\nThe scene is set against a blue sky, and the horses are surrounded by greenery. There are no other animals or people in the scene.",
+     "clipscore": 0.5376,
+     "words": 62,
+     "H": 1,
+     "recall": 0.5,
+     "n_gt": 2,
+     "hallucinated": [
+      "person"
+     ],
+     "named": [
+      "horse",
+      "person"
+     ],
+     "gt": [
+      "horse",
+      "zebra"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a herd of zebras grazing on a lush green field. There are at least 11 zebras in the scene, with some of them standing close together and others scattered throughout the field. The zebras are of various sizes, with some closer to the front and others further back.\n\nThe grassy field is surrounded by trees, creating a natural and serene environment for the zebras to graze. The scene captures the beauty and grace of these majestic animals in their natural habitat.",
+     "clipscore": 0.7554,
+     "words": 83,
+     "H": 0,
+     "recall": 0.5,
+     "n_gt": 2,
+     "hallucinated": [],
+     "named": [
+      "zebra"
+     ],
+     "gt": [
+      "horse",
+      "zebra"
+     ]
+    }
+   }
+  },
+  "113403": {
+   "image_id": 113403,
+   "title": "Teddy bears  (Fig. 4.19)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000113403.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a man and a woman sitting on a couch, watching a television. The man is holding a remote control in his hand, and the woman is holding a cup of coffee. They are both dressed in casual clothing, and the room they are in appears to be a living room.\n\nThe television is placed on a stand, and there is a small table with a cup of coffee on it. The room also has a lamp and a few other items, such as a clock and a vase. The scene is cozy and comfortable, with the couple enjoying their time together.",
+     "clipscore": 0.4288,
+     "words": 104,
+     "H": 13,
+     "recall": 0.0,
+     "n_gt": 3,
+     "hallucinated": [
+      "clock",
+      "couch",
+      "cup",
+      "dining table",
+      "person",
+      "remote",
+      "tv",
+      "vase"
+     ],
+     "named": [
+      "clock",
+      "couch",
+      "cup",
+      "dining table",
+      "person",
+      "remote",
+      "tv",
+      "vase"
+     ],
+     "gt": [
+      "bear",
+      "bed",
+      "teddy bear"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features two stuffed animals, a brown teddy bear and a pink bear, lying on a bed together. The teddy bear is positioned on the left side of the bed, while the pink bear is on the right side. The bed is covered with a white blanket, and the stuffed animals are resting comfortably on it. \n\nThere are two pillows on the bed, one on the left side and the other on the right side. The room is dimly lit, creating a cozy atmosphere for the stuffed animals.",
+     "clipscore": 0.8677,
+     "words": 89,
+     "H": 0,
+     "recall": 1.0,
+     "n_gt": 3,
+     "hallucinated": [],
+     "named": [
+      "bear",
+      "bed",
+      "teddy bear"
+     ],
+     "gt": [
+      "bear",
+      "bed",
+      "teddy bear"
+     ]
+    }
+   }
+  },
+  "9914": {
+   "image_id": 9914,
+   "title": "Sandwich and fries  (Fig. 4.7)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000009914.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a man standing in a kitchen, holding a large, brown, and furry dog. The dog is sitting on a countertop, and the man is holding it in his arms. The countertop is covered with various food items, including a bowl of cereal, a plate of eggs, and a cup of coffee. There are also several other food items scattered around the kitchen, such as a bottle of ketchup, a bottle of mustard, and a bottle of hot sauce. The man and the dog appear to be enjoying their meal together in the kitchen.",
+     "clipscore": 0.4712,
+     "words": 96,
+     "H": 9,
+     "recall": 0.3333,
+     "n_gt": 6,
+     "hallucinated": [
+      "bottle",
+      "dog",
+      "person"
+     ],
+     "named": [
+      "bottle",
+      "bowl",
+      "cup",
+      "dog",
+      "person"
+     ],
+     "gt": [
+      "bowl",
+      "cup",
+      "dining table",
+      "hot dog",
+      "knife",
+      "sandwich"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a delicious sandwich served on a plate, with a generous portion of fries on the side. The sandwich is placed on a white plate, and it is topped with a variety of ingredients, including lettuce, tomatoes, and cheese. The sandwich is accompanied by a bowl of fries, which are placed on the plate next to the sandwich. The fries are also served with a side of ketchup, adding a touch of flavor to the meal. The overall presentation of the meal is appetizing and inviting, making it a satisfying and enjoyable dining experience.",
+     "clipscore": 0.8753,
+     "words": 96,
+     "H": 0,
+     "recall": 0.3333,
+     "n_gt": 6,
+     "hallucinated": [],
+     "named": [
+      "bowl",
+      "sandwich"
+     ],
+     "gt": [
+      "bowl",
+      "cup",
+      "dining table",
+      "hot dog",
+      "knife",
+      "sandwich"
+     ]
+    }
+   }
+  },
+  "134882": {
+   "image_id": 134882,
+   "title": "Cat on a bed  (Fig. 4.20)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000134882.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a large, comfortable living room with a couch and a chair placed in front of a fireplace. The room is well-lit, with a lamp on the coffee table and a lamp on the side table. There is a television mounted on the wall, and a book is placed on the coffee table. The room is spacious and inviting, with a rug on the floor and a rug on the couch. \n\nA woman is seated on the couch, reading a book, while a man is standing in the room. There is a cat in the room as well, adding to the cozy atmosphere. The room is decorated with various items, including a vase on the coffee table, a clock on the wall, and a plant on the side table.",
+     "clipscore": 0.5594,
+     "words": 132,
+     "H": 14,
+     "recall": 0.4,
+     "n_gt": 5,
+     "hallucinated": [
+      "chair",
+      "clock",
+      "couch",
+      "dining table",
+      "person",
+      "tv",
+      "vase"
+     ],
+     "named": [
+      "book",
+      "cat",
+      "chair",
+      "clock",
+      "couch",
+      "dining table",
+      "person",
+      "tv",
+      "vase"
+     ],
+     "gt": [
+      "bed",
+      "book",
+      "cat",
+      "laptop",
+      "teddy bear"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a black and white cat sitting on a bed, surrounded by a variety of books. The cat is lying on the bed, with its head resting on a pillow. The books are scattered around the bed, some placed on the bed itself, while others are on the floor. There are at least 12 books visible in the scene, with some placed closer to the cat and others further away. The cat appears to be relaxed and comfortable in its cozy environment.",
+     "clipscore": 0.6971,
+     "words": 83,
+     "H": 0,
+     "recall": 0.6,
+     "n_gt": 5,
+     "hallucinated": [],
+     "named": [
+      "bed",
+      "book",
+      "cat"
+     ],
+     "gt": [
+      "bed",
+      "book",
+      "cat",
+      "laptop",
+      "teddy bear"
+     ]
+    }
+   }
+  },
+  "34760": {
+   "image_id": 34760,
+   "title": "Bathroom  (Fig. 4.21)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000034760.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a kitchen with a large wooden table in the center. The table is surrounded by chairs, and there are several people sitting on the chairs. The table is covered with a white tablecloth, and there are several cups and plates on the table. \n\nIn the background, there are several cabinets and a refrigerator, which can be seen behind the people. The kitchen appears to be well-equipped and functional, providing a comfortable and inviting space for gathering and dining.",
+     "clipscore": 0.3849,
+     "words": 82,
+     "H": 10,
+     "recall": 0.0,
+     "n_gt": 3,
+     "hallucinated": [
+      "chair",
+      "cup",
+      "dining table",
+      "person",
+      "refrigerator"
+     ],
+     "named": [
+      "chair",
+      "cup",
+      "dining table",
+      "person",
+      "refrigerator"
+     ],
+     "gt": [
+      "bottle",
+      "sink",
+      "toilet"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a bathroom with a white sink and a toilet. The sink is located on the left side of the room, while the toilet is on the right side. The sink is equipped with a faucet, and there is a towel hanging on the wall above it.\n\nThe bathroom is spacious and well-lit, with a window on the right side of the room, allowing natural light to enter. There is also a mirror on the wall, providing a reflection of the room's contents. A bottle can be seen on the countertop, possibly containing soap or other bathroom essentials.",
+     "clipscore": 0.8088,
+     "words": 102,
+     "H": 0,
+     "recall": 1.0,
+     "n_gt": 3,
+     "hallucinated": [],
+     "named": [
+      "bottle",
+      "sink",
+      "toilet"
+     ],
+     "gt": [
+      "bottle",
+      "sink",
+      "toilet"
+     ]
+    }
+   }
+  },
+  "92839": {
+   "image_id": 92839,
+   "title": "Polar bear  (Fig. 4.11)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000092839.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a white and brown dog sitting on a wooden dock, with its head resting on its front paws. The dog is facing the camera, and its body is partially submerged in the water. The dock is located on a lake or a river, with a boat visible in the background. The dog appears to be enjoying its time on the dock, possibly taking a break from swimming or playing in the water.",
+     "clipscore": 0.5148,
+     "words": 75,
+     "H": 4,
+     "recall": 0.0,
+     "n_gt": 1,
+     "hallucinated": [
+      "boat",
+      "dog"
+     ],
+     "named": [
+      "boat",
+      "dog"
+     ],
+     "gt": [
+      "bear"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a large white polar bear lying on its side on a snowy surface, possibly a frozen lake. The bear is positioned in the center of the scene, taking up most of the frame. The snowy background provides a serene and natural setting for the polar bear.\n\nIn the background, there are several other animals scattered around the scene, including a few dogs and a cat. The dogs are located on the left side of the image, while the cat is on the right side. The dogs appear to be smaller than the polar bear, and the cat is positioned further away from the main focus.",
+     "clipscore": 0.7351,
+     "words": 108,
+     "H": 6,
+     "recall": 1.0,
+     "n_gt": 1,
+     "hallucinated": [
+      "cat",
+      "dog"
+     ],
+     "named": [
+      "bear",
+      "cat",
+      "dog"
+     ],
+     "gt": [
+      "bear"
+     ]
+    }
+   }
+  },
+  "135890": {
+   "image_id": 135890,
+   "title": "Clock  (Fig. 4.9)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000135890.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a large, well-lit room with a desk and a chair in the center. There are several books on the desk, and a computer is placed on the left side of the desk. The room is spacious and has a large window, allowing natural light to enter.\n\nIn the room, there are two people, a man and a woman, sitting at the desk. The man is wearing a suit and tie, while the woman is wearing a dress. They are both working on their computers, with the man using a laptop and the woman using a desktop computer.\n\nThere are several other people in the room, some of whom are standing and others sitting. Some of them are engaged in conversations, while others are looking at the computer screens or reading books. The room appears to be a busy and productive workspace.",
+     "clipscore": 0.3881,
+     "words": 145,
+     "H": 13,
+     "recall": 0.5,
+     "n_gt": 2,
+     "hallucinated": [
+      "book",
+      "chair",
+      "dining table",
+      "laptop",
+      "tie"
+     ],
+     "named": [
+      "book",
+      "chair",
+      "dining table",
+      "laptop",
+      "person",
+      "tie"
+     ],
+     "gt": [
+      "clock",
+      "person"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a large clock tower located in a city, with a clock face visible on the tower. The clock is situated on the top of the tower, and it is surrounded by a large group of people, including a man and a woman standing in the foreground. The crowd is gathered around the clock, possibly to admire its beauty or to take pictures.\n\nThere are several other people scattered throughout the scene, some closer to the clock and others further away. The clock tower is a prominent landmark in the city, attracting the attention of the people who are gathered around it.",
+     "clipscore": 0.6494,
+     "words": 104,
+     "H": 0,
+     "recall": 1.0,
+     "n_gt": 2,
+     "hallucinated": [],
+     "named": [
+      "clock",
+      "person"
+     ],
+     "gt": [
+      "clock",
+      "person"
+     ]
+    }
+   }
+  },
+  "99182": {
+   "image_id": 99182,
+   "title": "Desk  (Fig. 4.10)",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000099182.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a room with a desk and a chair. The desk is located in the middle of the room, and a chair is placed near the desk. There is a book on the desk, and a pen is placed on the chair.\n\nThe room is well-lit, with a lamp placed on the desk. The room also has a window, which allows natural light to enter the space. The room is neat and tidy, with the desk and chair placed in an organized manner.",
+     "clipscore": 0.6102,
+     "words": 86,
+     "H": 4,
+     "recall": 0.5,
+     "n_gt": 4,
+     "hallucinated": [
+      "chair"
+     ],
+     "named": [
+      "book",
+      "chair",
+      "dining table"
+     ],
+     "gt": [
+      "bed",
+      "book",
+      "dining table",
+      "person"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a man sitting on a bed, reading a book. He is holding the book in his hands, with the pages turned to a specific page. The room is dimly lit, creating a cozy atmosphere.\n\nThere are several other books scattered around the room, some of which are placed on the bed, while others are on the floor. A pencil can be seen on the bed, and a bottle is also present in the room. A chair is located in the background, and a clock is visible on the wall.",
+     "clipscore": 0.8183,
+     "words": 92,
+     "H": 3,
+     "recall": 0.75,
+     "n_gt": 4,
+     "hallucinated": [
+      "bottle",
+      "chair",
+      "clock"
+     ],
+     "named": [
+      "bed",
+      "book",
+      "bottle",
+      "chair",
+      "clock",
+      "person"
+     ],
+     "gt": [
+      "bed",
+      "book",
+      "dining table",
+      "person"
+     ]
+    }
+   }
+  },
+  "3156": {
+   "image_id": 3156,
+   "title": "COCO val2017",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000003156.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a man standing in a room, holding a baseball bat. He is wearing a white shirt and blue jeans, and he has a baseball cap on his head. The room is filled with various items, including a baseball glove, a bat, and a baseball. There is also a chair in the room.\n\nIn addition to the man, there are two other people in the room, one of whom is standing near the chair. The other person is sitting on the chair, facing the man with the baseball bat.",
+     "clipscore": 0.5865,
+     "words": 91,
+     "H": 6,
+     "recall": 0.3333,
+     "n_gt": 3,
+     "hallucinated": [
+      "baseball bat",
+      "baseball glove",
+      "chair"
+     ],
+     "named": [
+      "baseball bat",
+      "baseball glove",
+      "chair",
+      "person"
+     ],
+     "gt": [
+      "person",
+      "sink",
+      "toilet"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a man standing in a bathroom, holding a toilet brush and a bottle of cleaner. He is wearing a white shirt and is in the process of cleaning the toilet. The bathroom is equipped with a sink, a toilet, and a shower.\n\nThere are several other people in the room, some of whom are standing near the sink and others in the background. A toilet paper roll is also present in the bathroom, likely for use by the people in the room.",
+     "clipscore": 0.7411,
+     "words": 85,
+     "H": 1,
+     "recall": 1.0,
+     "n_gt": 3,
+     "hallucinated": [
+      "bottle"
+     ],
+     "named": [
+      "bottle",
+      "person",
+      "sink",
+      "toilet"
+     ],
+     "gt": [
+      "person",
+      "sink",
+      "toilet"
+     ]
+    }
+   }
+  },
+  "19432": {
+   "image_id": 19432,
+   "title": "COCO val2017",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000019432.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a man standing in a room with a baseball bat in his hand. He is wearing a baseball uniform, which consists of a white shirt, blue pants, and a blue belt. The man is holding the bat in front of him, with his left hand on the handle and his right hand on the barrel.\n\nThere are several baseballs scattered around the room, some of which are on the floor and others on the ground. The room also has a baseball glove on the floor, which is likely used for catching or throwing the baseballs.",
+     "clipscore": 0.4629,
+     "words": 98,
+     "H": 2,
+     "recall": 0.25,
+     "n_gt": 4,
+     "hallucinated": [
+      "baseball bat",
+      "baseball glove"
+     ],
+     "named": [
+      "baseball bat",
+      "baseball glove",
+      "person"
+     ],
+     "gt": [
+      "chair",
+      "person",
+      "sports ball",
+      "tennis racket"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a tennis court with a man in a white shirt and white shorts playing a game of tennis. He is holding a tennis racket and is in the process of hitting a tennis ball. The ball is flying through the air, and the man is focused on the ball's trajectory.\n\nThere are several other people in the scene, some of whom are standing around the court, watching the game. One person is located near the left side of the court, while another person is closer to the right side. A third person is standing further back, observing the game.\n\nIn addition to the tennis court, there are two chairs placed on the court, one near the left side and the other near the right side. A tennis racket can also be seen on the court, possibly belonging to the player or another participant.",
+     "clipscore": 0.7175,
+     "words": 147,
+     "H": 0,
+     "recall": 1.0,
+     "n_gt": 4,
+     "hallucinated": [],
+     "named": [
+      "chair",
+      "person",
+      "sports ball",
+      "tennis racket"
+     ],
+     "gt": [
+      "chair",
+      "person",
+      "sports ball",
+      "tennis racket"
+     ]
+    }
+   }
+  },
+  "42070": {
+   "image_id": 42070,
+   "title": "COCO val2017",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000042070.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a man standing in front of a large, black, and shiny car. He is holding a black briefcase in his right hand, and he is wearing a black suit and a white shirt. The car is parked on a street, and there are several other cars visible in the background.\n\nThe man is looking at the camera, possibly taking a picture or posing for a photo. There are several people visible in the background, some of whom are standing near the car.",
+     "clipscore": 0.4804,
+     "words": 85,
+     "H": 1,
+     "recall": 0.6667,
+     "n_gt": 3,
+     "hallucinated": [
+      "handbag"
+     ],
+     "named": [
+      "car",
+      "handbag",
+      "person"
+     ],
+     "gt": [
+      "bus",
+      "car",
+      "person"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a city bus parked on a street, with a large sign above the bus reading \"City Bus.\" The bus is parked in front of a building, and there are several people standing around the bus, possibly waiting for it to depart. Some of the people are standing closer to the bus, while others are further away.\n\nThere are a total of 11 people visible in the scene, with some standing closer to the bus and others further away. The bus itself is quite large, occupying a significant portion of the scene.",
+     "clipscore": 0.7407,
+     "words": 93,
+     "H": 0,
+     "recall": 0.6667,
+     "n_gt": 3,
+     "hallucinated": [],
+     "named": [
+      "bus",
+      "person"
+     ],
+     "gt": [
+      "bus",
+      "car",
+      "person"
+     ]
+    }
+   }
+  },
+  "109118": {
+   "image_id": 109118,
+   "title": "COCO val2017",
+   "image_source": "/Users/hassine_elghazel/Desktop/Data science and engineering/a.y 2025 2026/second semester/Thesis/LLAMA_modality_gap/demo/images/000000109118.jpg",
+   "models": {
+    "all-pinned (baseline)": {
+     "caption": "The image features a man standing in a room with a baseball bat in his hand. He is wearing a baseball uniform, which consists of a white jersey with a red and blue stripe pattern, and blue pants. The man is holding the bat in front of a baseball glove, which is placed on a table.\n\nThere are several baseballs scattered around the room, some of which are on the table and others on the floor. The room also contains a baseball bat bag, which is placed on the floor near the table.",
+     "clipscore": 0.5702,
+     "words": 93,
+     "H": 5,
+     "recall": 0.5,
+     "n_gt": 4,
+     "hallucinated": [
+      "baseball bat",
+      "dining table"
+     ],
+     "named": [
+      "baseball bat",
+      "baseball glove",
+      "dining table",
+      "person"
+     ],
+     "gt": [
+      "baseball glove",
+      "chair",
+      "person",
+      "sports ball"
+     ]
+    },
+    "Cloc_80k (location drive)": {
+     "caption": "The image features a group of men standing in a room, all wearing baseball uniforms. They are posing for a team photo, with some of them holding baseball bats. There are a total of 11 men in the scene, each one standing in a different position.\n\nThe room is filled with various items, including a few chairs, a bench, and a table. A chair is located in the center of the room, while a bench is placed on the left side. A table is situated in the middle of the room, and a backpack can be seen on the right side.",
+     "clipscore": 0.7926,
+     "words": 100,
+     "H": 6,
+     "recall": 0.5,
+     "n_gt": 4,
+     "hallucinated": [
+      "backpack",
+      "baseball bat",
+      "bench",
+      "dining table"
+     ],
+     "named": [
+      "backpack",
+      "baseball bat",
+      "bench",
+      "chair",
+      "dining table",
+      "person"
+     ],
+     "gt": [
+      "baseball glove",
+      "chair",
+      "person",
+      "sports ball"
+     ]
+    }
+   }
+  }
+ }
+}
