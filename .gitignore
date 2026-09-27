@@ -1,7 +1,7 @@
 # Data and model artifacts (large, regenerable)
 data/
 references/
-defense/
+defense_/
 outputs/
 *.pt
 *.bin
