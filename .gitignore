@@ -1,11 +1,11 @@
 # Data and model artifacts (large, regenerable)
 data/
 references/
+defense/
 outputs/
 *.pt
 *.bin
 *.safetensors
-
 # Python
 __pycache__/
 *.py[cod]
