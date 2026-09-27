@@ -1,429 +1,230 @@
-# Measuring the Modality Gap in MLLMs — Connector Ablation Study
+# Decomposing the Modality Gap
 
-> Master thesis project · Data Science & Engineering, a.y. 2025–2026
+**Single-Axis Attribution of Representation Geometry in Multimodal Large Language Models**
+
+> Master's thesis · Politecnico di Torino, Data Science and Engineering, a.y. 2025–2026
+> Hassine El Ghazel · supervisors prof. Giuseppe Rizzo, Dr. Federico D'Asaro, Dr. Luca Catalano
 
 ---
 
-## Objective
+## What this asks
 
-Measure how the connector's training regime affects the modality gap in a Multimodal Large Language Model.
-Through four experimental conditions, we isolate the contributions of contrastive pre-training (Stage 1)
-and autoregressive refinement (Stage 2) to the evolution of the modality gap. All measurements are taken
-in the LLM's 4096-dim input space.
+In a connector-based multimodal LLM, projected visual tokens and text embeddings occupy separate
+regions of the decoder's input space. That separation is the *modality gap*, and it is usually
+reported as a single number: the distance between the two centroids.
+
+A cloud can differ from another in more than its centre. This work splits the gap into **four
+measurable axes**, drives **one at a time while pinning the other three**, and asks which of them a
+frozen language decoder is actually sensitive to when it has to describe an image.
+
+The gap is measured against the text the model **generates**, not against what it retrieves.
+
+---
+
+## Headline result
+
+Six conditions, identical budget, identical pins, one axis released each. Brief captioning,
+MSCOCO `val2017`, n = 5,000; `z` is against the pinned baseline.
+
+| condition | axis released | CLIPScore ↑ | z | verdict |
+|:---|:---|---:|---:|:---|
+| all-pinned | none | 0.5799 | - | control |
+| **Cloc** | location | **0.6325** | **+22.9** | **the lever** |
+| Cscale1500 | scale | 0.5466 | −12.8 | the mirror |
+| Crank15 | shape | 0.5769 | −1.3 | a null |
+| Corient | orientation | 0.5950 | +6.3 | weak |
+| Clocorient | location + orientation | 0.6421 | +27.4 | confounded ¹ |
+
+Closing the centroid distance raises CLIPScore by 0.0526 and improves object hallucination **and**
+recall at the same time, so it is not a say-less trade. Compressing total variance is the exact
+mirror: every metric moves the other way. Halving the effective rank changes nothing measurable.
+Orientation returns about a third of what location returns.
+
+¹ Clocorient's gain over Cloc cannot be credited to orientation: its centroid also closes further,
+from 30.97 to 11.72.
+
+**Isolation is measured, not assumed.** Each condition moved its own axis by 45–116 % of the
+baseline value while every off-target axis moved by at most 16 %.
+
+---
+
+## The four axes
+
+Let $\bar x, \bar y$ be the cloud means and $\Sigma_X$ the image covariance, with eigenvalues
+$\lambda_1 \ge \dots \ge \lambda_d$ and $d = 4096$. Everything is measured **at the connector
+output**, because that is the input the decoder actually receives.
+
+| axis | definition | plain meaning |
+|:---|:---|:---|
+| **Location** | $G_\mu = \lVert \bar x - \bar y \rVert$, $\;\widehat G_\mu = G_\mu / \sqrt{\operatorname{tr}\Sigma_X}$ | distance between the two centres |
+| **Scale** | $s = \operatorname{tr}\Sigma_X = \sum_j \lambda_j$ | total variance of the image cloud |
+| **Shape** | $r = (\operatorname{tr}\Sigma_X)^2 / \operatorname{tr}(\Sigma_X^2) \in [1,d]$ | how many directions the variance spreads over |
+| **Orientation** | $O_q = \frac{1}{q}\lVert U_X^{(q)\top} U_Y^{(q)}\rVert_F^2 = \frac{1}{q}\operatorname{tr}(P_X P_Y)$ | overlap of the principal subspaces |
+
+The diagnostic computes twenty scalars per checkpoint. Four survive three constraints:
+**non-degeneracy** (must vary across conditions), **non-redundancy** (must not be an algebraic
+function of one already kept), and **controllability** (must be drivable by a differentiable penalty
+on a single batch of 64 images). Orientation overlap is read as a multiple of chance, $q/d$; results
+use $q = 16$, where chance is $\approx 3.9 \times 10^{-3}$.
 
 ---
 
 ## Architecture
 
-The pipeline is fixed across all conditions. A single connector maps CLIP visual features into LLaMA's input space.
+Fixed across every condition. The connector is the only component that varies.
 
 ```
- ┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
- │    Image     │────▶│  CLIP ViT-L/14   │────▶│   Connector      │────▶│  LLaMA-2-7B      │
- │   224×224    │     │    [FROZEN]       │     │      MLP         │     │   + LoRA         │
- └──────────────┘     │     → 1024       │     │  1024 → 4096     │     │    4096          │
-                      └──────────────────┘     └────────┬─────────┘     └──────────────────┘
-                                                         │
-                                                ╔════════╧════════╗
-                                                ║  Measurement Pt ║
-                                                ║   4096-dim      ║
-                                                ╚═════════════════╝
+image 224x224 -> CLIP ViT-L/14 (frozen) -> 257 tokens, 1024-d
+                                        -> Connector (trainable, 2-layer MLP + GELU, 21.0 M)
+                                        -> 257 tokens, 4096-d
+                                        -> LLaMA-2-7B (4-bit NF4, frozen) + LoRA r=8
+                                        -> text
+                                             ^
+                              instruction ---+
 ```
 
-**Figure 1:** Full pipeline. The connector is the only component that varies across conditions.
-The modality gap is measured at the connector output.
-
-| Component | Architecture | Dimension | Role |
-|:---|:---|:---|:---|
-| CLIP ViT-L/14 | Vision transformer | → 1024 | Frozen vision encoder |
-| Connector | 2-layer MLP + GELU | 1024 → 4096 | Maps visual features to LLM space |
-| LLaMA-2-7B | Causal LM + LoRA | 4096 | Text generation |
-
----
-
-## Stage 1: Contrastive Connector Pre-training
-
-Stage 1 is a standalone preparation step. It trains the connector with contrastive loss so that it does
-not start with random weights in Stage 2. The alignment happens in LLaMA's 4096-dim space.
-
-```
- ┌────────┐   ┌──────────────────┐   ┌──────────────────────┐
- │ Image  │──▶│ CLIP ViT-L/14   │──▶│  Connector           │──▶  z_img
- └────────┘   │   [FROZEN]      │   │  1024 → 4096         │
-              └──────────────────┘   │  [TRAINED]           │
-                                     └──────────┬───────────┘
-                                                │
-                                       ╔════════╧═════════╗          z_img ──┐
-                                       ║  Measure gap     ║                  ├──▶  InfoNCE Loss
-                                       ║  after training  ║          z_txt ──┘
-                                       ╚══════════════════╝
- ┌──────────┐   ┌─────────────────┐   ┌──────────────────────┐
- │ Caption  │──▶│ LLaMA Tokenizer │──▶│  LLaMA Embed         │──▶  z_txt
- └──────────┘   └─────────────────┘   │  [FROZEN] → 4096     │
-                                      └──────────────────────┘
-```
-
-**Figure 2:** Stage 1 — contrastive alignment in LLaMA's 4096-dim space.
-
-### Training Setup
-
-| Component | Status |
+| component | detail |
 |:---|:---|
-| CLIP ViT-L/14 | Frozen |
-| Connector (1024 → 4096) | **Trained** |
-| LLaMA Embed Layer | Frozen (text-side target only) |
-| LLaMA (rest of model) | Not involved |
-
-### Forward Pass
-
-- **Image side:** image → Frozen ViT → CLS token (1024) → Connector → **z_img** (4096)
-- **Text side:** caption → LLaMA tokenizer → LLaMA embed layer (frozen) → mean pool → **z_txt** (4096)
-
-### Loss Function
-
-Symmetric InfoNCE loss over a batch of $N$ image-caption pairs:
-
-$$\mathcal{L} = \frac{1}{2}\left[\mathrm{CE}\!\left(\frac{\mathbf{z}_{\mathrm{img}} \cdot \mathbf{z}_{\mathrm{txt}}^\top}{\tau},\,\mathbf{y}\right) + \mathrm{CE}\!\left(\frac{\mathbf{z}_{\mathrm{txt}} \cdot \mathbf{z}_{\mathrm{img}}^\top}{\tau},\,\mathbf{y}\right)\right]$$
-
-where $\tau$ is a learnable temperature (initialised at $0.07$) and $\mathbf{y} = [0, 1, \ldots, N{-}1]$.
-
-### Data
-
-`BoyaWu10/Bunny-v1.1-data`
-
-### Output
-
-Saved connector checkpoint.
+| Vision encoder | CLIP ViT-L/14 at 224 px, frozen, 257 visual tokens |
+| Connector | `mlp2x_gelu`, 1024 → 4096 → 4096, 21.0 M parameters |
+| Decoder | LLaMA-2-7B, 4-bit NF4 with double quantisation, bfloat16 compute |
+| Adapters | LoRA r = 8, α = 16, dropout 0.05, on `q_proj` / `v_proj` / `o_proj` |
+| Measurement point | connector output, 4096-d, mean over the 257 projected tokens |
 
 ---
 
-## Stage 2: Autoregressive Image Captioning
+## Training
 
-Stage 2 refines the connector and trains the LLM to generate text conditioned on visual tokens.
+Two stages, following the LLaVA recipe.
 
-```
- ┌────────┐   ┌────────────────┐   ┌────────────────────────┐
- │ Image  │──▶│  ViT [FROZEN]  │──▶│  Connector [REFINED]   │──▶ 257 × 4096 ──┐
- └────────┘   └────────────────┘   │  1024 → 4096           │                  │
-                                   └──────────┬─────────────┘                  ├──▶ [LLaMA-2-7B + LoRA] ──▶ Caption
-                                              │                                  │        [TRAINED]
-                                     ╔════════╧═════════╗    Caption tokens ───┘
-                                     ║  Measure gap     ║    (tokenize + embed)
-                                     ║  after training  ║
-                                     ╚══════════════════╝
-```
+**Stage 1 · contrastive connector pre-training.** Only the connector moves. Each image is encoded by
+the frozen vision tower, projected, and reduced to its `[CLS]` token; the paired caption is passed
+through the frozen embedding table and mean-pooled. A symmetric InfoNCE objective with a learnable
+temperature pulls matched pairs together. Data: Bunny-v1.1. This stage is what makes orientation a
+manipulable axis: without an aligned reference there is nothing to rotate towards.
 
-**Figure 3:** Stage 2 — autoregressive captioning. The connector is refined, not frozen.
+**Stage 2 · instruction tuning.** The connector is refined together with the LoRA adapters under an
+autoregressive cross-entropy loss on response tokens only. The geometry terms enter here:
 
-### Training Setup
+$$\mathcal{L} = 0.9\,\mathcal{L}_{\mathrm{AR}} + 0.1\,\mathcal{L}_{\mathrm{dist}}
+              + 1.0\,\mathcal{L}_{\mathrm{scale}} + 1.0\,\mathcal{L}_{\mathrm{rank}}$$
 
-| Component | Status |
-|:---|:---|
-| CLIP ViT-L/14 | Frozen |
-| Connector (1024 → 4096) | **Refined** (loaded from Stage 1 or random) |
-| LLaMA-2-7B + LoRA | **Trained** |
+The language term and the driven axis form a convex combination, so geometry is paid for out of the
+language budget rather than added on top. The two pins are additive guards. Retargeting a pin instead
+of removing it is what turns a pin into a drive.
 
-### Forward Pass
-
-**Image side:**
-
-$$\text{image} \;\to\; \text{Frozen ViT} \;\to\; 257 \times 1024 \;\to\; \text{Connector (refined)} \;\to\; 257 \times 4096 \quad \text{(visual tokens)}$$
-
-**Text side:**
-
-$$\text{caption} \;\to\; \text{LLaMA tokenizer} \;\to\; \text{LLaMA embed layer} \;\to\; \mathrm{seq\_len} \times 4096 \quad \text{(text tokens)}$$
-
-**Combined:** Visual tokens and text tokens are concatenated. LLaMA (+ LoRA) predicts the next token
-autoregressively. Cross-entropy loss on text positions only.
-
-### Data
-
-`liuhaotian/LLaVA-Instruct-150K`
-
----
-
-## Experimental Conditions
-
-Four conditions isolate the contributions of Stage 1 (contrastive) and Stage 2 (autoregressive)
-to the modality gap.
-
-### C0: No Training (Baseline)
-
-- Connector: random initialisation
-- LLaMA: pre-trained weights, no LoRA
-- **Nothing is trained. Stage 1 is not run. Stage 2 is not run.**
-- Measure the modality gap
-
-### C1: Stage 2 Only (No Contrastive Preparation)
-
-- Stage 1 is not run
-- Connector: starts random, **trained** directly in Stage 2
-- LLaMA + LoRA: **trained**
-- Run Stage 2 → measure the modality gap after Stage 2
-
-### C2: Stage 1 Only (No Autoregressive Refinement)
-
-- Run Stage 1: train connector with contrastive loss → save checkpoint
-- Measure the modality gap after Stage 1
-- Plug connector into LLM. **Stage 2 is not run.**
-- Evaluate zero-shot captioning performance
-
-### C3: Full Pipeline (Stage 1 + Stage 2)
-
-- Run Stage 1: train connector with contrastive loss → save checkpoint
-- Measure the modality gap after Stage 1
-- Load trained connector into Stage 2; connector **refined** during Stage 2; LLaMA + LoRA **trained**
-- Run Stage 2 → measure the modality gap after Stage 2
-
-### Conditions Summary
-
-| | Connector init | Stage 1 (contrastive) | Stage 2 (autoregressive) |
-|:---|:---:|:---:|:---:|
-| **C0** | Random | ✗ | ✗ |
-| **C1** | Random | ✗ | ✓ |
-| **C2** | Random | ✓ | ✗ |
-| **C3** | Random | ✓ | ✓ |
-
----
-
-## Modality Gap Measurement
-
-All measurements are taken at the **connector output** (4096-dim), comparing image embeddings from the
-connector against text embeddings from LLaMA's embedding layer. The same evaluation set is used for
-every measurement.
-
-### Embeddings Compared
-
-$$\mathbf{z}_{\mathrm{img}} = \mathrm{mean\text{-}pool}\!\bigl(\mathrm{Connector}(\mathrm{ViT}(\mathrm{image}))\bigr) \in \mathbb{R}^{4096}$$
-
-$$\mathbf{z}_{\mathrm{txt}} = \mathrm{mean\text{-}pool}\!\bigl(\mathrm{LLaMA\_embed}(\mathrm{tokenize}(\mathrm{caption}))\bigr) \in \mathbb{R}^{4096}$$
-
-### Measurement Schedule
-
-| When | C0 | C1 | C2 | C3 |
-|:---|:---:|:---:|:---:|:---:|
-| At initialisation (random connector) | ✓ | — | — | — |
-| After Stage 1 (contrastive) | — | — | ✓ | ✓ |
-| After Stage 2 (autoregressive) | — | ✓ | — | ✓ |
-
-This produces **5 gap measurements**: 1 from C0, 1 from C1, 1 from C2, and 2 from C3.
-
-### Key Comparisons
-
-| Comparison | Variable isolated | Question answered |
+| | Stage 1 | Stage 2 |
 |:---|:---|:---|
-| C0 vs C2 | Stage 1 alone | Does contrastive training reduce the gap? |
-| C0 vs C1 | Stage 2 alone | Does autoregressive training reduce the gap? |
-| C1 vs C3 | Effect of Stage 1 preparation | Does contrastive pre-training help Stage 2? |
-| C2 vs C3 | Effect of Stage 2 refinement | Does autoregressive refinement further close the gap? |
+| Objective | symmetric InfoNCE | AR cross-entropy (+ geometry terms) |
+| Trainable | connector | connector and LoRA |
+| Data | Bunny-v1.1 | LLaVA-Instruct-150K, ≈ 14,400 items |
+| Learning rate | 5e-4, cosine, 3 % warm-up | 2e-4, cosine, 3 % warm-up |
+| Batch | 64 | 4 × 8 accumulation (effective 32) |
 
-The **core comparison is C1 vs C3**. If C3's gap is significantly smaller than C1's, then contrastive
-pre-training (Stage 1) provides a measurable benefit that autoregressive training alone cannot achieve.
-If they are similar, Stage 1 was unnecessary.
-
----
-
-## Metrics
-
-All metrics are computed at the connector output (4096-dim) at each measurement point in the schedule above.
-
-### Geometric Metrics
-
-| Metric | What it measures |
-|:---|:---|
-| Centroid distance | First-order gap magnitude |
-| Power-law exponent α | Semantic hierarchy preservation |
-| JS divergence | Angular topology mismatch |
-| k-NN mixing rate | Manifold penetration |
-| ‖β‖, ‖γ‖ | Bias decomposition (PMB, COB) |
-| κ(Σ_U), κ(Σ_V) | Residual anisotropy |
-| Effective rank | Representation compactness |
-| Trace | Global variance scale |
-
-### Downstream Performance
-
-Evaluated for conditions C1, C2, and C3 (C0 has no trained LLM).
-
-| Category | Benchmarks |
-|:---|:---|
-| General Perception | MME, MMStar, ScienceQA-image, RealWorldQA |
-| Complex Reasoning | MMMU, MMMU-Pro, VisuLogic, LogicVista |
-| Hallucination | CRPE, POPE, HallusionBench |
-| Captioning Quality | CIDEr, BLEU-4, METEOR (COCO val2017) |
-
-### Visualisation
-
-PCA visualisations of the combined image and text embedding distributions (4096-dim) for all conditions,
-projecting onto the first two principal components. Additionally, gap decomposition plots showing how the
-bias (β, γ) and residual anisotropy (κ) evolve from C0 through C2 to C3.
-
-### Evaluation Data
-
-COCO val2017: 5,000 images with 5 captions each. This is the evaluation set used for every measurement
-point across all conditions. No overlap with Stage 1 or Stage 2 training data.
+Every condition ran **450 optimizer steps**, about **9.1 % of one epoch**, on a **single RTX 2080 Ti
+(11 GB)**, roughly 20 hours per scheduled job. bfloat16, seed 42.
 
 ---
 
-## Setup
+## Evaluation
 
-### Prerequisites
+| regime | data | metrics |
+|:---|:---|:---|
+| Brief captioning | MSCOCO `val2017`, 5,000 images | CLIPScore, SPICE, METEOR, BLEU-4, CIDEr |
+| Detailed description (`dd256`) | first 1,300 of `val2017`, 256-token cap | CLIPScore, CHAIR<sub>s</sub>, CHAIR<sub>i</sub>, object recall |
 
-- Python 3.10
-- CUDA 12.1+ recommended; bf16-capable GPU
-- HuggingFace account with access to `meta-llama/Llama-2-7b-hf` (gated)
-- ~150 GB free disk for datasets and checkpoints
-
-### Install
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[train,dev]"
-bash scripts/01_download_data.sh
-```
+Three metric families, so no single scoring convention carries the claim: reference-free
+(CLIPScore, ViT-B/32, $2.5 \cdot \max(\cos, 0)$), reference-based (SPICE, METEOR), and object
+hallucination (CHAIR plus recall). The detailed regime drops the n-gram metrics, which need short
+reference captions.
 
 ---
 
-## Running the Ablation
+## Scaling the location drive
 
-Each condition is fully orchestrated by `scripts/run_condition.py`:
+Location was the axis worth extending, so that configuration was carried further on the same
+objective, the same pins and the same data stream. `dd256`, n = 1,300.
 
-```bash
-python scripts/run_condition.py --condition C0   # random connector — gap only
-python scripts/run_condition.py --condition C1   # Stage 2 from random connector
-python scripts/run_condition.py --condition C2   # Stage 1 only, zero-shot LLM
-python scripts/run_condition.py --condition C3   # Stage 1 → Stage 2
-```
+| | steps | items | CLIPScore ↑ | CHAIR<sub>i</sub> ↓ | recall ↑ |
+|:---|---:|---:|---:|---:|---:|
+| all-pinned | 450 | 14,400 | 0.5703 | 0.4396 | 0.4529 |
+| Cloc | 450 | 14,400 | 0.6187 | 0.3698 | 0.5116 |
+| Cloc_long | 1,529 | 48,928 | 0.6886 | 0.3314 | 0.6393 |
+| **Cloc_80k** | **2,500** | **80,000** | **0.7033** | **0.3133** | **0.6675** |
+| LLaVA-1.5-7B (reference) | - | ≈ 1.2 M | 0.7910 | 0.1518 | 0.7738 |
 
-Per-step invocation:
-
-```bash
-# Stage 1 InfoNCE pretraining
-python scripts/05_train_stage1.py --config configs/training_stage1.yaml
-
-# Stage 2 LoRA SFT (init from Stage 1 connector for C3, from random for C1)
-python scripts/06_train_stage2.py --config configs/training_stage2.yaml \
-       --stage1-checkpoint outputs/checkpoints/stage1_connector.pt
-
-# Gap measurement per condition
-python scripts/07_extract_projected.py --condition C3_stage1
-python scripts/03_compute_gap.py --condition C3_stage1
-python scripts/04_make_plots.py --condition C3_stage1
-
-# Downstream
-python scripts/08_run_captioning.py --condition C3_stage2
-python scripts/09_score_captions.py --condition C3_stage2
-python scripts/10_run_vlmevalkit.py --condition C3_stage2
-```
-
-### Tests
-
-```bash
-pytest tests/ -v                            # full suite (95 tests)
-pytest tests/ -m "not slow and not gpu"     # fast CI subset
-```
+Monotone, clearly diminishing, no collapse. Cloc_80k covers **60 %** of the CLIPScore distance to
+the reference, 44 % of CHAIR<sub>i</sub> and 67 % of recall, with roughly fifteen times less data.
+The reference is also advantaged elsewhere: 336 px inputs and 576 visual tokens against 224 and 257,
+and an instruction-tuned decoder. It is a reference, not a competitor.
 
 ---
 
-## Repository Layout
+## Repository layout
 
 ```
-configs/
-  encoders.yaml             CLIP ViT-L/14 @ 224 config
-  projector.yaml            MLP connector: 1024 → 4096 → 4096
-  llm.yaml                  LLaMA-2-7B config
-  data.yaml                 Bunny-v1.1 · LLaVA-Instruct-150K · COCO val2017
-  captioning.yaml           Generation + COCO val2017 eval config
-  training_stage1.yaml      InfoNCE schedule, learnable τ
-  training_stage2.yaml      LoRA targets, hyperparameters
-
+configs/      YAML for encoders, projector, LLM, both training stages and the eval regimes
 src/
-  encoders/clip_encoder.py  CLIP ViT-L/14 → (B, 257, 1024)
-  models/projector.py       MLP2xGELU (1024 → 4096 → 4096)
-  models/vlm.py             Encoder + connector + LLaMA-2 splice
-  data/coco_val2017_loader.py
-  data/bunny_v1_1_loader.py
-  data/llava_instruct_loader.py
-  training/contrastive_loss.py   Symmetric InfoNCE with learnable τ
-  training/stage1_pretrain.py
-  training/stage2_sft.py
-  diagnostics/metrics.py    Spec metrics + Float64 discipline
-  diagnostics/plots.py      Per-condition figures + trajectory
-  evaluation/vlmevalkit_adapter.py
-
-scripts/
-  01_download_data.sh
-  05_train_stage1.py  ·  06_train_stage2.py
-  07_extract_projected.py   --condition {C0,C1,C2,C3-stage1,C3-stage2}
-  08_run_captioning.py  ·  09_score_captions.py  ·  10_run_vlmevalkit.py
-  run_condition.py          End-to-end orchestrator
+  encoders/     frozen CLIP wrapper
+  models/       connector, VLM splice, checkpoint I/O
+  training/     stage 1 and stage 2 loops, geometry objectives
+  diagnostics/  projected-embedding extraction, the 20-statistic suite, plots
+  evaluation/   captioning and scoring helpers
+  data/         COCO, Bunny, LLaVA-Instruct, DOCCI loaders
+scripts/      numbered pipeline steps (03 gap, 05/06 train, 08 caption, 15 CLIPScore, 19 CHAIR, ...)
+              plus the Slurm submission scripts for each condition
+demo/         live side-by-side demo (see README_DEMO.md)
+outputs/      checkpoints, predictions, metrics, logs
+tests/        unit tests
 ```
 
----
+## Reproducing
 
-## Reproducibility
+```bash
+bash scripts/00_setup_env.sh          # Python 3.10, CUDA 12.1; uv preferred
+bash scripts/01_download_data.sh
 
-Every script writes alongside its outputs a config snapshot, git commit hash, `pip freeze` dump, random
-seeds, hardware info, and walltime. `torch.backends.cudnn.deterministic = True` and `benchmark = False`
-are set globally.
+python scripts/05_train_stage1.py --config configs/training_stage1.yaml
+python scripts/06_train_stage2.py --config configs/training_stage2.yaml
 
----
-
-## References
-
-```bibtex
-@article{yu2026realign,
-  title   = {ReAlign: Addressing the Modality Gap in Multimodal LLMs},
-  author  = {Yu, Xiao-Ming and others},
-  journal = {arXiv preprint arXiv:2602.07026},
-  year    = {2026}
-}
-
-@article{yu2026aniso,
-  title   = {AnisoAlign: Anisotropic Residual Structure in Multimodal Alignment},
-  author  = {Yu, Xiao-Ming and others},
-  journal = {arXiv preprint arXiv:2605.07825},
-  year    = {2026}
-}
-
-@article{liang2022modality,
-  title   = {Mind the Gap: Understanding the Modality Gap in Multi-modal Contrastive
-             Representation Learning},
-  author  = {Liang, Weixin and others},
-  journal = {NeurIPS},
-  year    = {2022}
-}
-
-@inproceedings{radford2021clip,
-  title     = {Learning Transferable Visual Models From Natural Language Supervision},
-  author    = {Radford, Alec and others},
-  booktitle = {ICML},
-  year      = {2021}
-}
-
-@article{touvron2023llama2,
-  title   = {Llama 2: Open Foundation and Fine-Tuned Chat Models},
-  author  = {Touvron, Hugo and others},
-  journal = {arXiv preprint arXiv:2307.09288},
-  year    = {2023}
-}
-
-@inproceedings{liu2023llava,
-  title     = {Visual Instruction Tuning},
-  author    = {Liu, Haotian and others},
-  booktitle = {NeurIPS},
-  year      = {2023}
-}
-
-@misc{vlmevalkit,
-  title  = {VLMEvalKit: An Open-Source Toolkit for Evaluating Large Multi-Modality Models},
-  author = {OpenCompass Contributors},
-  year   = {2024},
-  url    = {https://github.com/open-compass/VLMEvalKit}
-}
+python scripts/07_extract_projected.py --condition <tag>
+python scripts/03_compute_gap.py       --condition <tag>
+python scripts/08_run_captioning.py    --condition <tag> --vlm-checkpoint <ckpt>
+python scripts/15_clipscore.py         --condition <tag>
+python scripts/19_chair.py             --condition <tag> --baseline C3pinr_dd256
 ```
 
+On a Slurm cluster each condition has a submission script, for example
+`scripts/submit_cloc_long.sbatch` and `scripts/submit_cloc_continue.sbatch` for the two rungs of the
+scaling ladder. `java` is required on `PATH` for METEOR and SPICE.
+
 ---
 
-## License
+## What this budget leaves open
 
-MIT (project code). Vendored third-party code retains its original license — see `THIRD_PARTY_LICENSES.md`.
+- 450 optimizer steps, about 9.1 % of one epoch, on a single 11 GB GPU. The models are instruments,
+  not competitive systems; every claim is a contrast between conditions sharing that budget exactly.
+- One seed per condition. Reported standard errors describe variation across evaluation images, not
+  across training runs.
+- Only the location drive was carried past 450 steps, so the longer rungs have no matched
+  all-pinned control at 1,529 or 2,500 steps.
+- Captioning only. Whether the location axis matters for question-conditioned output is untested.
+
+---
+
+## Using this work
+
+**Code** in this repository is licensed under the **GNU AGPL-3.0-or-later** (see `LICENSE`).
+You may use, study, modify and redistribute it, including for research, provided derivative
+works are released under the same licence. If you run a modified version as a network
+service, the AGPL requires you to offer its source to users of that service.
+
+**The thesis text, its figures and the generated captions** are not covered by that licence.
+All rights in them are reserved by the author.
+
+Vendored third-party files retain their original licences; see `THIRD_PARTY_LICENSES.md`.
+
+If you use this code or results derived from it, please cite the thesis. `CITATION.cff`
+carries the machine-readable record, and GitHub's "Cite this repository" button reads it.
+
+Copyright (c) 2026 Hassine El Ghazel.

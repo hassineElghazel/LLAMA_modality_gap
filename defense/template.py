@@ -341,3 +341,89 @@ def new_deck():
     prs.slide_width  = Pt(W)
     prs.slide_height = Pt(H)
     return prs
+
+
+# ---------------------------------------------------------------- shapes ----
+# Native-shape helpers for schematic figures drawn directly in the deck.
+FROZEN_FILL = RGBColor(0xEF, 0xEF, 0xEC)   # grey  = frozen, as in the TikZ figures
+FROZEN_LINE = RGBColor(0xB4, 0xB4, 0xAE)
+TRAIN_FILL  = RGBColor(0xF6, 0xE7, 0xDE)   # warm  = trainable (deck accent family)
+TRAIN_LINE  = ACCENT
+DATA_FILL   = RGBColor(0xFF, 0xFF, 0xFF)
+DATA_LINE   = RGBColor(0xC8, 0xC8, 0xC2)
+
+
+def rrect(slide, x, y, w, h, *, fill=DATA_FILL, line=DATA_LINE, lw=1.1,
+          radius=0.16, rounded=True):
+    from pptx.enum.shapes import MSO_SHAPE
+    s = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE if rounded else MSO_SHAPE.RECTANGLE,
+        Pt(x), Pt(y), Pt(w), Pt(h))
+    if rounded:
+        s.adjustments[0] = radius
+    s.fill.solid(); s.fill.fore_color.rgb = fill
+    s.line.color.rgb = line; s.line.width = Pt(lw)
+    s.shadow.inherit = False
+    s.text_frame.word_wrap = True
+    for p in s.text_frame.paragraphs:
+        p.alignment = PP_ALIGN.CENTER
+    s.text_frame.margin_left = s.text_frame.margin_right = Pt(3)
+    s.text_frame.margin_top = s.text_frame.margin_bottom = Pt(2)
+    s.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+    return s
+
+
+def shape_text(shape, lines, size=12, color=BODY_COL, bold_first=True):
+    """lines = [str, ...]; the first line is the label, the rest are captions."""
+    tf = shape.text_frame
+    for i, txt in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = PP_ALIGN.CENTER
+        r = p.add_run(); r.text = txt
+        r.font.name = FONT
+        r.font.size = Pt(size if i == 0 else size - 2)
+        r.font.bold = bold_first and i == 0
+        r.font.color.rgb = color if i == 0 else MUTED_COL
+    return shape
+
+
+def arrow(slide, x1, y1, x2, y2, *, color=None, lw=1.4, head=True):
+    from pptx.enum.shapes import MSO_CONNECTOR
+    c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
+                                   Pt(x1), Pt(y1), Pt(x2), Pt(y2))
+    c.line.color.rgb = color or RGBColor(0x8A, 0x8A, 0x86)
+    c.line.width = Pt(lw)
+    if head:
+        ln = c.line._get_or_add_ln()
+        tail = ln.makeelement(qn("a:tailEnd"),
+                              {"type": "triangle", "w": "sm", "len": "sm"})
+        ln.append(tail)
+    return c
+
+
+def oval(slide, cx, cy, w, h, *, rot=0.0, fill=None, line=None, lw=1.2,
+         alpha=None):
+    from pptx.enum.shapes import MSO_SHAPE
+    s = slide.shapes.add_shape(MSO_SHAPE.OVAL, Pt(cx - w / 2), Pt(cy - h / 2),
+                               Pt(w), Pt(h))
+    if fill is None:
+        s.fill.background()
+    else:
+        s.fill.solid(); s.fill.fore_color.rgb = fill
+        if alpha is not None:
+            sf = s.fill.fore_color._xFill.find(qn("a:srgbClr"))
+            sf.append(sf.makeelement(qn("a:alpha"),
+                                     {"val": str(int(alpha * 100000))}))
+    s.line.color.rgb = line or RGBColor(0x9A, 0x9A, 0x96)
+    s.line.width = Pt(lw)
+    s.shadow.inherit = False
+    if rot: s.rotation = rot
+    return s
+
+
+def label(slide, x, y, w, text, size=11, color=MUTED_COL, align=PP_ALIGN.CENTER,
+          bold=False, italic=False):
+    _, tf = _txbox(slide, x, y, w, size * 1.9)
+    para(tf, text, size, color=color, align=align, first=True, bold=bold,
+         italic=italic)
+    return tf

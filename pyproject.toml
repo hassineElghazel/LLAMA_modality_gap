@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "modality-gap-connector-ablation"
 version = "0.1.0"
-description = "Connector ablation study (C0/C1/C2/C3) measuring the modality gap in a LLaMA-2-7B + CLIP ViT-L/14 MLLM"
+description = "Single-axis attribution of the modality gap in a LLaMA-2-7B + CLIP ViT-L/14 MLLM"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
-license = { text = "MIT" }
-authors = [{ name = "Thesis project" }]
+license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "Hassine El Ghazel" }]
 
 dependencies = [
   "torch==2.3.1",

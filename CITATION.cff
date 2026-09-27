@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use this code, or results derived from it, please cite the thesis below."
+title: "Decomposing the Modality Gap: Single-Axis Attribution of Representation Geometry in Multimodal Large Language Models"
+abstract: >-
+  Code and experiments for a four-axis decomposition of the modality gap in a
+  connector-based multimodal large language model. Each axis (location, scale,
+  shape, orientation) is driven in isolation while the other three are pinned,
+  giving a single-axis attribution of caption quality.
+type: software
+authors:
+  - family-names: "El Ghazel"
+    given-names: "Hassine"
+    affiliation: "Politecnico di Torino"
+repository-code: "https://github.com/hassineElghazel/LLAMA_modality_gap"
+license: AGPL-3.0-or-later
+keywords:
+  - modality gap
+  - multimodal large language models
+  - representation geometry
+  - image captioning
+  - object hallucination
+preferred-citation:
+  type: thesis
+  title: "Decomposing the Modality Gap: Single-Axis Attribution of Representation Geometry in Multimodal Large Language Models"
+  authors:
+    - family-names: "El Ghazel"
+      given-names: "Hassine"
+  thesis-type: "Master's thesis"
+  institution:
+    name: "Politecnico di Torino"
+  department: "Data Science and Engineering"
+  year: 2026
+  month: 9

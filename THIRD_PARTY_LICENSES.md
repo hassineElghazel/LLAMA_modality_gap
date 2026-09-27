@@ -12,12 +12,13 @@ where the vendored code lives in this repo.
 
 ## Vendored code
 
-(none yet — populate as files are copied from `references/`)
+The project licence is AGPL-3.0-or-later. Anything vendored here must carry a
+licence compatible with redistribution under it (MIT, BSD, Apache-2.0, GPL/AGPL).
 
 | Path in this repo | Source repo | Commit | License | Notes |
 |---|---|---|---|---|
-| `configs/deepspeed/zero2.json` | `Yu-xm/ReVision` | `9353aea` | (see ReVision LICENSE) | Verbatim copy of `script/deepspeed/zero2.json`. Used by Stage 1 + Stage 2 trainers. |
-| `configs/deepspeed/zero3.json` | `Yu-xm/ReVision` | `9353aea` | (see ReVision LICENSE) | Verbatim copy of `script/deepspeed/zero3.json`. Reserved for memory-tight Stage 2 runs. |
+| `configs/deepspeed/zero2.json` | `Yu-xm/ReVision` | `9353aea` | **UNVERIFIED - confirm before publishing** | Verbatim copy of `script/deepspeed/zero2.json`. Used by Stage 1 + Stage 2 trainers. |
+| `configs/deepspeed/zero3.json` | `Yu-xm/ReVision` | `9353aea` | **UNVERIFIED - confirm before publishing** | Verbatim copy of `script/deepspeed/zero3.json`. Reserved for memory-tight Stage 2 runs. |
 
 ---
 
