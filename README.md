@@ -19,6 +19,11 @@ frozen language decoder is actually sensitive to when it has to describe an imag
 
 The gap is measured against the text the model **generates**, not against what it retrieves.
 
+<p align="center">
+  <img src="docs/img/modality_gap.png" alt="COCO images and their own captions occupy separate regions of the shared space" width="760">
+</p>
+
+
 ---
 
 ## Headline result
@@ -43,6 +48,10 @@ Orientation returns about a third of what location returns.
 ¹ Clocorient's gain over Cloc cannot be credited to orientation: its centroid also closes further,
 from 30.97 to 11.72.
 
+<p align="center">
+  <img src="docs/img/interventions.png" alt="One axis released, the other three pinned" width="720">
+</p>
+
 **Isolation is measured, not assumed.** Each condition moved its own axis by 45–116 % of the
 baseline value while every off-target axis moved by at most 16 %.
 
@@ -56,10 +65,10 @@ output**, because that is the input the decoder actually receives.
 
 | axis | definition | plain meaning |
 |:---|:---|:---|
-| **Location** | $G_\mu = \lVert \bar x - \bar y \rVert$, $\;\widehat G_\mu = G_\mu / \sqrt{\operatorname{tr}\Sigma_X}$ | distance between the two centres |
-| **Scale** | $s = \operatorname{tr}\Sigma_X = \sum_j \lambda_j$ | total variance of the image cloud |
-| **Shape** | $r = (\operatorname{tr}\Sigma_X)^2 / \operatorname{tr}(\Sigma_X^2) \in [1,d]$ | how many directions the variance spreads over |
-| **Orientation** | $O_q = \frac{1}{q}\lVert U_X^{(q)\top} U_Y^{(q)}\rVert_F^2 = \frac{1}{q}\operatorname{tr}(P_X P_Y)$ | overlap of the principal subspaces |
+| **Location** | $G_\mu = \lVert \bar x - \bar y \rVert$, $\;\widehat G_\mu = G_\mu / \sqrt{\mathrm{tr}\Sigma_X}$ | distance between the two centres |
+| **Scale** | $s = \mathrm{tr}\Sigma_X = \sum_j \lambda_j$ | total variance of the image cloud |
+| **Shape** | $r = (\mathrm{tr}\Sigma_X)^2 / \mathrm{tr}(\Sigma_X^2) \in [1,d]$ | how many directions the variance spreads over |
+| **Orientation** | $O_q = \frac{1}{q}\lVert U_X^{(q)\top} U_Y^{(q)}\rVert_F^2 = \frac{1}{q}\mathrm{tr}(P_X P_Y)$ | overlap of the principal subspaces |
 
 The diagnostic computes twenty scalars per checkpoint. Four survive three constraints:
 **non-degeneracy** (must vary across conditions), **non-redundancy** (must not be an algebraic
@@ -67,21 +76,23 @@ function of one already kept), and **controllability** (must be drivable by a di
 on a single batch of 64 images). Orientation overlap is read as a multiple of chance, $q/d$; results
 use $q = 16$, where chance is $\approx 3.9 \times 10^{-3}$.
 
+<p align="center">
+  <img src="docs/img/four_axes.png" alt="Four axes: location, scale, shape, orientation" width="560">
+</p>
+
+<p align="center"><em>The text cloud is frozen; the image cloud differs on one axis only.</em></p>
+
+
 ---
 
 ## Architecture
 
 Fixed across every condition. The connector is the only component that varies.
 
-```
-image 224x224 -> CLIP ViT-L/14 (frozen) -> 257 tokens, 1024-d
-                                        -> Connector (trainable, 2-layer MLP + GELU, 21.0 M)
-                                        -> 257 tokens, 4096-d
-                                        -> LLaMA-2-7B (4-bit NF4, frozen) + LoRA r=8
-                                        -> text
-                                             ^
-                              instruction ---+
-```
+<p align="center">
+  <img src="docs/img/architecture.png" alt="CLIP ViT-L/14 to a 2-layer MLP connector to LLaMA-2-7B with LoRA" width="720">
+</p>
+
 
 | component | detail |
 |:---|:---|
@@ -121,6 +132,10 @@ of removing it is what turns a pin into a drive.
 | Learning rate | 5e-4, cosine, 3 % warm-up | 2e-4, cosine, 3 % warm-up |
 | Batch | 64 | 4 × 8 accumulation (effective 32) |
 
+<p align="center">
+  <img src="docs/img/training_stages.png" alt="Stage 1 contrastive connector pre-training, Stage 2 autoregressive instruction tuning" width="780">
+</p>
+
 Every condition ran **450 optimizer steps**, about **9.1 % of one epoch**, on a **single RTX 2080 Ti
 (11 GB)**, roughly 20 hours per scheduled job. bfloat16, seed 42.
 
@@ -152,6 +167,10 @@ objective, the same pins and the same data stream. `dd256`, n = 1,300.
 | Cloc_long | 1,529 | 48,928 | 0.6886 | 0.3314 | 0.6393 |
 | **Cloc_80k** | **2,500** | **80,000** | **0.7033** | **0.3133** | **0.6675** |
 | LLaVA-1.5-7B (reference) | - | ≈ 1.2 M | 0.7910 | 0.1518 | 0.7738 |
+
+<p align="center">
+  <img src="docs/img/scaling.png" alt="Caption quality against training steps for the location drive" width="700">
+</p>
 
 Monotone, clearly diminishing, no collapse. Cloc_80k covers **60 %** of the CLIPScore distance to
 the reference, 44 % of CHAIR<sub>i</sub> and 67 % of recall, with roughly fifteen times less data.
